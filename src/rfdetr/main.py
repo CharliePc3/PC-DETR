@@ -265,6 +265,15 @@ class Model:
 
         criterion, postprocess = build_criterion_and_postprocessors(args)
         model = self.model
+        for attr in (
+            "use_cdn",
+            "dn_number",
+            "dn_label_noise_scale",
+            "dn_box_noise_scale",
+            "dn_negative",
+        ):
+            if hasattr(model, attr):
+                setattr(model, attr, getattr(args, attr))
         model.to(device)
 
         model_without_ddp = model
@@ -1046,6 +1055,15 @@ def get_args_parser():
     parser.add_argument("--use_varifocal_loss", action="store_true")
     parser.add_argument("--use_position_supervised_loss", action="store_true")
     parser.add_argument("--ia_bce_loss", action="store_true")
+    parser.add_argument("--use_cdn", action="store_true")
+    parser.add_argument("--dn_number", default=100, type=int)
+    parser.add_argument("--dn_label_noise_scale", default=0.5, type=float)
+    parser.add_argument("--dn_box_noise_scale", default=1.0, type=float)
+    parser.add_argument("--no_dn_negative", dest="dn_negative", action="store_false")
+    parser.set_defaults(dn_negative=True)
+    parser.add_argument("--dn_loss_coef", default=1.0, type=float)
+    parser.add_argument("--dn_neg_loss_coef", default=1.0, type=float)
+    parser.set_defaults(segmentation_head=False, mask_downsample_ratio=4)
 
     # dataset parameters
     parser.add_argument("--dataset_file", default="coco")
@@ -1208,12 +1226,21 @@ def populate_args(
     use_varifocal_loss=False,
     use_position_supervised_loss=False,
     ia_bce_loss=False,
+    use_cdn=False,
+    dn_number=100,
+    dn_label_noise_scale=0.5,
+    dn_box_noise_scale=1.0,
+    dn_negative=True,
+    dn_loss_coef=1.0,
+    dn_neg_loss_coef=1.0,
     # Dataset parameters
     dataset_file="coco",
     coco_path=None,
     dataset_dir=None,
     square_resize_div_64=False,
     aug_config=None,
+    segmentation_head=False,
+    mask_downsample_ratio=4,
     # Output parameters
     output_dir="output",
     dont_save_weights=False,
@@ -1316,11 +1343,20 @@ def populate_args(
         use_varifocal_loss=use_varifocal_loss,
         use_position_supervised_loss=use_position_supervised_loss,
         ia_bce_loss=ia_bce_loss,
+        use_cdn=use_cdn,
+        dn_number=dn_number,
+        dn_label_noise_scale=dn_label_noise_scale,
+        dn_box_noise_scale=dn_box_noise_scale,
+        dn_negative=dn_negative,
+        dn_loss_coef=dn_loss_coef,
+        dn_neg_loss_coef=dn_neg_loss_coef,
         dataset_file=dataset_file,
         coco_path=coco_path,
         dataset_dir=dataset_dir,
         square_resize_div_64=square_resize_div_64,
         aug_config=aug_config,
+        segmentation_head=segmentation_head,
+        mask_downsample_ratio=mask_downsample_ratio,
         output_dir=output_dir,
         dont_save_weights=dont_save_weights,
         checkpoint_interval=checkpoint_interval,

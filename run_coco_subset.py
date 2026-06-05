@@ -108,6 +108,7 @@ def parse_args():
     parser.add_argument("--dec-layers", type=int, default=DEFAULT_DEC_LAYERS)
     parser.add_argument("--num-queries", type=int, default=DEFAULT_NUM_QUERIES)
     parser.add_argument("--num-select", type=int, default=DEFAULT_NUM_SELECT)
+    parser.add_argument("--group-detr", type=int, default=13)
     parser.add_argument("--lr", type=float, default=DEFAULT_LR)
     parser.add_argument("--lr-encoder", type=float, default=DEFAULT_LR_ENCODER)
     parser.add_argument("--weight-decay", type=float, default=DEFAULT_WEIGHT_DECAY)
@@ -121,6 +122,14 @@ def parse_args():
         help="Feature levels produced by MultiScaleProjector and consumed by the decoder.",
     )
     parser.add_argument("--eval-max-dets", type=int, default=100)
+    parser.add_argument("--use-cdn", action="store_true")
+    parser.add_argument("--dn-number", type=int, default=100)
+    parser.add_argument("--dn-label-noise-scale", type=float, default=0.5)
+    parser.add_argument("--dn-box-noise-scale", type=float, default=1.0)
+    parser.add_argument("--no-dn-negative", dest="dn_negative", action="store_false")
+    parser.set_defaults(dn_negative=True)
+    parser.add_argument("--dn-loss-coef", type=float, default=1.0)
+    parser.add_argument("--dn-neg-loss-coef", type=float, default=1.0)
     parser.add_argument("--use-ema", action="store_true")
     parser.add_argument("--tensorboard", action="store_true")
     parser.add_argument("--progress-bar", action="store_true")
@@ -155,8 +164,14 @@ def main():
         dec_layers=args.dec_layers,
         num_queries=args.num_queries,
         num_select=args.num_select,
+        group_detr=args.group_detr,
         projector_scale=args.projector_scale,
         positional_encoding_size=args.resolution // 16,
+        use_cdn=args.use_cdn,
+        dn_number=args.dn_number,
+        dn_label_noise_scale=args.dn_label_noise_scale,
+        dn_box_noise_scale=args.dn_box_noise_scale,
+        dn_negative=args.dn_negative,
     )
 
     log_main(f"project_root={PROJECT_ROOT}")
@@ -170,6 +185,7 @@ def main():
     log_main(f"dec_layers={args.dec_layers}")
     log_main(f"num_queries={args.num_queries}")
     log_main(f"num_select={args.num_select}")
+    log_main(f"group_detr={args.group_detr}")
     log_main(f"projector_scale={args.projector_scale}")
     log_main(f"lr={args.lr}")
     log_main(f"lr_encoder={args.lr_encoder}")
@@ -181,6 +197,9 @@ def main():
     log_main(f"aug_preset={args.aug_preset}")
     log_main(f"projector_type={getattr(model.model_config, 'projector_type', 'multiscale')}")
     log_main(f"eval_max_dets={args.eval_max_dets}")
+    log_main(f"use_cdn={args.use_cdn}")
+    log_main(f"dn_number={args.dn_number}")
+    log_main(f"dn_negative={args.dn_negative}")
 
     model.train(
         dataset_file="coco",
@@ -201,6 +220,7 @@ def main():
         dec_layers=args.dec_layers,
         num_queries=args.num_queries,
         num_select=args.num_select,
+        group_detr=args.group_detr,
         projector_scale=args.projector_scale,
         positional_encoding_size=args.resolution // 16,
         lr=args.lr,
@@ -215,6 +235,13 @@ def main():
         tensorboard=args.tensorboard,
         run_test=args.run_test,
         eval_max_dets=args.eval_max_dets,
+        use_cdn=args.use_cdn,
+        dn_number=args.dn_number,
+        dn_label_noise_scale=args.dn_label_noise_scale,
+        dn_box_noise_scale=args.dn_box_noise_scale,
+        dn_negative=args.dn_negative,
+        dn_loss_coef=args.dn_loss_coef,
+        dn_neg_loss_coef=args.dn_neg_loss_coef,
         progress_bar=args.progress_bar,
     )
 

@@ -29,6 +29,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from rfdetr.models.backbone import build_backbone
+from rfdetr.models.dn_components import compute_cdn_loss, dn_post_process, prepare_for_cdn
 from rfdetr.models.matcher import build_matcher
 from rfdetr.models.segmentation_head import (
     SegmentationHead,
@@ -62,6 +63,11 @@ class LWDETR(nn.Module):
         two_stage=False,
         lite_refpoint_refine=False,
         bbox_reparam=False,
+        use_cdn=False,
+        dn_number=100,
+        dn_label_noise_scale=0.5,
+        dn_box_noise_scale=1.0,
+        dn_negative=True,
     ):
         """Initializes the model.
         Parameters:
@@ -86,10 +92,16 @@ class LWDETR(nn.Module):
         self.refpoint_embed = nn.Embedding(num_queries * group_detr, query_dim)
         self.query_feat = nn.Embedding(num_queries * group_detr, hidden_dim)
         nn.init.constant_(self.refpoint_embed.weight.data, 0)
+        self.dn_label_embed = nn.Embedding(num_classes, hidden_dim)
 
         self.backbone = backbone
         self.aux_loss = aux_loss
         self.group_detr = group_detr
+        self.use_cdn = use_cdn
+        self.dn_number = dn_number
+        self.dn_label_noise_scale = dn_label_noise_scale
+        self.dn_box_noise_scale = dn_box_noise_scale
+        self.dn_negative = dn_negative
 
         # iter update
         self.lite_refpoint_refine = lite_refpoint_refine
@@ -135,6 +147,11 @@ class LWDETR(nn.Module):
                 enc_out_class_embed.weight.data = enc_out_class_embed.weight.data[:num_classes]
                 enc_out_class_embed.bias.data = enc_out_class_embed.bias.data.repeat(num_repeats)
                 enc_out_class_embed.bias.data = enc_out_class_embed.bias.data[:num_classes]
+
+        dn_base = self.dn_label_embed.weight.shape[0]
+        dn_num_repeats = int(math.ceil(num_classes / dn_base))
+        self.dn_label_embed.weight.data = self.dn_label_embed.weight.data.repeat(dn_num_repeats, 1)
+        self.dn_label_embed.weight.data = self.dn_label_embed.weight.data[:num_classes]
 
     def export(self):
         self._export = True
@@ -182,8 +199,35 @@ class LWDETR(nn.Module):
         if self.segmentation_head is not None:
             seg_head_fwd = self.segmentation_head.sparse_forward if self.training else self.segmentation_head.forward
 
+        dn_meta = None
+        dn_query_feat = dn_refpoint_embed = dn_attn_mask = None
+        if self.training and self.use_cdn and targets is not None:
+            if self.group_detr != 1:
+                raise NotImplementedError("CDN denoising is currently implemented for group_detr=1.")
+            if self.segmentation_head is not None:
+                raise NotImplementedError("CDN denoising is currently implemented for detection-only training.")
+            dn_query_feat, dn_refpoint_embed, dn_attn_mask, dn_meta = prepare_for_cdn(
+                targets=targets,
+                dn_number=self.dn_number,
+                label_noise_scale=self.dn_label_noise_scale,
+                box_noise_scale=self.dn_box_noise_scale,
+                num_queries=query_feat_weight.shape[0],
+                num_classes=self.class_embed.out_features,
+                hidden_dim=self.transformer.d_model,
+                label_embed=self.dn_label_embed,
+                bbox_reparam=self.bbox_reparam,
+                dn_negative=self.dn_negative,
+            )
+
         hs, ref_unsigmoid, hs_enc, ref_enc = self.transformer(
-            srcs, masks, poss, refpoint_embed_weight, query_feat_weight
+            srcs,
+            masks,
+            poss,
+            refpoint_embed_weight,
+            query_feat_weight,
+            dn_query_feat=dn_query_feat,
+            dn_refpoint_embed=dn_refpoint_embed,
+            dn_attn_mask=dn_attn_mask,
         )
 
         if hs is not None:
@@ -200,6 +244,14 @@ class LWDETR(nn.Module):
             if self.segmentation_head is not None:
                 outputs_masks = seg_head_fwd(features[0].tensors, hs, samples.tensors.shape[-2:])
 
+            outputs_class, outputs_coord, dn_meta = dn_post_process(
+                outputs_class,
+                outputs_coord,
+                dn_meta,
+                self.aux_loss,
+                self._set_aux_loss,
+            )
+
             out = {"pred_logits": outputs_class[-1], "pred_boxes": outputs_coord[-1]}
             if self.segmentation_head is not None:
                 out["pred_masks"] = outputs_masks[-1]
@@ -209,6 +261,8 @@ class LWDETR(nn.Module):
                     outputs_coord,
                     outputs_masks if self.segmentation_head is not None else None,
                 )
+            if dn_meta is not None:
+                out["dn_meta"] = dn_meta
 
         if self.two_stage:
             group_detr = self.group_detr if self.training else 1
@@ -700,7 +754,7 @@ class SetCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         group_detr = self.group_detr if self.training else 1
-        outputs_without_aux = {k: v for k, v in outputs.items() if k != "aux_outputs"}
+        outputs_without_aux = {k: v for k, v in outputs.items() if k not in ("aux_outputs", "dn_meta")}
 
         # Retrieve the matching between the outputs of the last layer and the targets
         indices = self.matcher(outputs_without_aux, targets, group_detr=group_detr)
@@ -718,6 +772,17 @@ class SetCriterion(nn.Module):
         losses = {}
         for loss in self.losses:
             losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
+
+        if "dn_meta" in outputs:
+            losses.update(
+                compute_cdn_loss(
+                    outputs["dn_meta"],
+                    targets,
+                    self.num_classes,
+                    self.focal_alpha,
+                    num_boxes,
+                )
+            )
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if "aux_outputs" in outputs:
@@ -991,6 +1056,11 @@ def build_model(args):
         two_stage=args.two_stage,
         lite_refpoint_refine=args.lite_refpoint_refine,
         bbox_reparam=args.bbox_reparam,
+        use_cdn=args.use_cdn,
+        dn_number=args.dn_number,
+        dn_label_noise_scale=args.dn_label_noise_scale,
+        dn_box_noise_scale=args.dn_box_noise_scale,
+        dn_negative=args.dn_negative,
     )
     return model
 
@@ -1000,6 +1070,11 @@ def build_criterion_and_postprocessors(args):
     matcher = build_matcher(args)
     weight_dict = {"loss_ce": args.cls_loss_coef, "loss_bbox": args.bbox_loss_coef}
     weight_dict["loss_giou"] = args.giou_loss_coef
+    if args.use_cdn:
+        weight_dict["loss_ce_dn"] = args.cls_loss_coef * args.dn_loss_coef
+        weight_dict["loss_bbox_dn"] = args.bbox_loss_coef * args.dn_loss_coef
+        weight_dict["loss_giou_dn"] = args.giou_loss_coef * args.dn_loss_coef
+        weight_dict["loss_ce_dn_neg"] = args.cls_loss_coef * args.dn_loss_coef * args.dn_neg_loss_coef
     if args.segmentation_head:
         weight_dict["loss_mask_ce"] = args.mask_ce_loss_coef
         weight_dict["loss_mask_dice"] = args.mask_dice_loss_coef

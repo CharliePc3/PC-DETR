@@ -64,6 +64,14 @@ def parse_args():
         help="Feature levels produced by MultiScaleProjector and consumed by the decoder.",
     )
     parser.add_argument("--eval-max-dets", type=int, default=100)
+    parser.add_argument("--use-cdn", action="store_true")
+    parser.add_argument("--dn-number", type=int, default=100)
+    parser.add_argument("--dn-label-noise-scale", type=float, default=0.5)
+    parser.add_argument("--dn-box-noise-scale", type=float, default=1.0)
+    parser.add_argument("--no-dn-negative", dest="dn_negative", action="store_false")
+    parser.set_defaults(dn_negative=True)
+    parser.add_argument("--dn-loss-coef", type=float, default=1.0)
+    parser.add_argument("--dn-neg-loss-coef", type=float, default=1.0)
     parser.add_argument("--use-ema", action="store_true")
     parser.add_argument("--tensorboard", action="store_true")
     parser.add_argument("--progress-bar", action="store_true")
@@ -90,6 +98,9 @@ def main():
     print(f"expanded_scales={args.expanded_scales}")
     print(f"aug_preset={args.aug_preset}")
     print(f"eval_max_dets={args.eval_max_dets}")
+    print(f"use_cdn={args.use_cdn}")
+    print(f"dn_number={args.dn_number}")
+    print(f"dn_negative={args.dn_negative}")
 
     model = RFDETRDINOv3(
         encoder=args.encoder,
@@ -101,6 +112,11 @@ def main():
         num_select=args.num_select,
         projector_scale=args.projector_scale,
         positional_encoding_size=positional_encoding_size,
+        use_cdn=args.use_cdn,
+        dn_number=args.dn_number,
+        dn_label_noise_scale=args.dn_label_noise_scale,
+        dn_box_noise_scale=args.dn_box_noise_scale,
+        dn_negative=args.dn_negative,
     )
 
     print("Starting training/evaluation...")
@@ -127,6 +143,13 @@ def main():
         lr_vit_layer_decay=args.lr_vit_layer_decay,
         lr_component_decay=args.lr_component_decay,
         eval_max_dets=args.eval_max_dets,
+        use_cdn=args.use_cdn,
+        dn_number=args.dn_number,
+        dn_label_noise_scale=args.dn_label_noise_scale,
+        dn_box_noise_scale=args.dn_box_noise_scale,
+        dn_negative=args.dn_negative,
+        dn_loss_coef=args.dn_loss_coef,
+        dn_neg_loss_coef=args.dn_neg_loss_coef,
         multi_scale=args.multi_scale,
         expanded_scales=args.expanded_scales,
         aug_config=AUG_PRESETS[args.aug_preset],

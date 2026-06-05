@@ -220,7 +220,17 @@ class Transformer(nn.Module):
         valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
         return valid_ratio
 
-    def forward(self, srcs, masks, pos_embeds, refpoint_embed, query_feat):
+    def forward(
+        self,
+        srcs,
+        masks,
+        pos_embeds,
+        refpoint_embed,
+        query_feat,
+        dn_query_feat=None,
+        dn_refpoint_embed=None,
+        dn_attn_mask=None,
+    ):
         src_flatten = []
         mask_flatten = [] if masks is not None else None
         lvl_pos_embed_flatten = []
@@ -312,9 +322,14 @@ class Transformer(nn.Module):
 
                 refpoint_embed = torch.concat([refpoint_embed_ts_subset, refpoint_embed_subset], dim=-2)
 
+            if dn_query_feat is not None:
+                tgt = torch.cat([dn_query_feat, tgt], dim=1)
+                refpoint_embed = torch.cat([dn_refpoint_embed, refpoint_embed], dim=1)
+
             hs, references = self.decoder(
                 tgt,
                 memory,
+                tgt_mask=dn_attn_mask,
                 memory_key_padding_mask=mask_flatten,
                 pos=lvl_pos_embed_flatten,
                 refpoints_unsigmoid=refpoint_embed,

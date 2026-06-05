@@ -71,6 +71,13 @@ class ModelConfig(BaseConfig):
     positional_encoding_size: int
     ia_bce_loss: bool = True
     cls_loss_coef: float = 1.0
+    use_cdn: bool = False
+    dn_number: int = 100
+    dn_label_noise_scale: float = 0.5
+    dn_box_noise_scale: float = 1.0
+    dn_negative: bool = True
+    dn_loss_coef: float = 1.0
+    dn_neg_loss_coef: float = 1.0
     segmentation_head: bool = False
     mask_downsample_ratio: int = 4
     license: str = "Apache-2.0"
@@ -299,6 +306,13 @@ class TrainConfig(BaseModel):
     group_detr: int = 13
     ia_bce_loss: bool = True
     cls_loss_coef: float = 1.0
+    use_cdn: bool = False
+    dn_number: int = 100
+    dn_label_noise_scale: float = 0.5
+    dn_box_noise_scale: float = 1.0
+    dn_negative: bool = True
+    dn_loss_coef: float = 1.0
+    dn_neg_loss_coef: float = 1.0
     num_select: int = 300
     dataset_file: Literal["coco", "o365", "roboflow", "yolo"] = "roboflow"
     square_resize_div_64: bool = True
