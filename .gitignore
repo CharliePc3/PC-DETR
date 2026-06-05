@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.log
+*.pth
+*.pt
+*.onnx
+output/
+outputs/
+weights/
+ckpts/
+wandb/
+runs/
+.DS_Store
