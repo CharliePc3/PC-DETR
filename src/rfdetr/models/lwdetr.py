@@ -202,8 +202,6 @@ class LWDETR(nn.Module):
         dn_meta = None
         dn_query_feat = dn_refpoint_embed = dn_attn_mask = None
         if self.training and self.use_cdn and targets is not None:
-            if self.group_detr != 1:
-                raise NotImplementedError("CDN denoising is currently implemented for group_detr=1.")
             if self.segmentation_head is not None:
                 raise NotImplementedError("CDN denoising is currently implemented for detection-only training.")
             dn_query_feat, dn_refpoint_embed, dn_attn_mask, dn_meta = prepare_for_cdn(
@@ -211,12 +209,13 @@ class LWDETR(nn.Module):
                 dn_number=self.dn_number,
                 label_noise_scale=self.dn_label_noise_scale,
                 box_noise_scale=self.dn_box_noise_scale,
-                num_queries=query_feat_weight.shape[0],
+                num_queries=self.num_queries,
                 num_classes=self.class_embed.out_features,
                 hidden_dim=self.transformer.d_model,
                 label_embed=self.dn_label_embed,
                 bbox_reparam=self.bbox_reparam,
                 dn_negative=self.dn_negative,
+                group_detr=self.group_detr,
             )
 
         hs, ref_unsigmoid, hs_enc, ref_enc = self.transformer(
@@ -781,6 +780,7 @@ class SetCriterion(nn.Module):
                     self.num_classes,
                     self.focal_alpha,
                     num_boxes,
+                    normalizer_group_detr=group_detr if self.sum_group_losses else 1,
                 )
             )
 

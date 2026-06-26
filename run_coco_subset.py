@@ -32,17 +32,6 @@ DEFAULT_EPOCHS = {
     "full": 24,
 }
 DEFAULT_ENCODER = "dinov3_small"
-DEFAULT_RESOLUTION = 640
-DEFAULT_DEC_LAYERS = 4
-DEFAULT_NUM_QUERIES = 300
-DEFAULT_NUM_SELECT = 300
-DEFAULT_PROJECTOR_SCALE = ["P4"]
-DEFAULT_LR = 1e-4
-DEFAULT_LR_ENCODER = 1.5e-4
-DEFAULT_WEIGHT_DECAY = 1e-4
-DEFAULT_LR_VIT_LAYER_DECAY = 0.8
-DEFAULT_LR_COMPONENT_DECAY = 0.7
-
 AUG_PRESETS = {
     "default": AUG_CONFIG,
     "conservative": AUG_CONSERVATIVE,
@@ -78,6 +67,57 @@ def log_main(message):
         print(message, flush=True)
 
 
+def make_output_dir(args):
+    if args.output_dir is not None:
+        return Path(args.output_dir)
+
+    if args.resume:
+        resume_path = Path(args.resume)
+        return resume_path.parent if resume_path.suffix else resume_path
+
+    scale_tag = "".join(args.projector_scale).lower()
+    run_tags = [
+        f"coco_{args.subset}",
+        DEFAULT_ENCODER.replace("_", ""),
+        f"r{args.resolution}",
+        f"d{args.dec_layers}",
+        f"q{args.num_queries}",
+        f"g{args.group_detr}",
+        f"{scale_tag}",
+    ]
+    if args.multi_scale:
+        run_tags.append("ms")
+    if args.expanded_scales:
+        run_tags.append("expanded")
+    if args.aug_preset != "default":
+        run_tags.append(f"aug{args.aug_preset}")
+    if args.use_cdn:
+        neg_tag = "neg" if args.dn_negative else "pos"
+        run_tags.extend(
+            [
+                "cdn",
+                f"dn{args.dn_number}",
+                f"box{args.dn_box_noise_scale:g}",
+                f"lbl{args.dn_label_noise_scale:g}",
+                f"loss{args.dn_loss_coef:g}",
+                neg_tag,
+            ]
+        )
+    else:
+        run_tags.append("nocdn")
+
+    base_dir = PROJECT_ROOT / "output" / "_".join(run_tags)
+    if not base_dir.exists():
+        return base_dir
+
+    run_idx = 1
+    while True:
+        candidate = base_dir.with_name(f"{base_dir.name}_run{run_idx:02d}")
+        if not candidate.exists():
+            return candidate
+        run_idx += 1
+
+
 def parse_args():
     parser = argparse.ArgumentParser("Run RF-DETR-DINOv3 on prepared COCO subsets.")
     parser.add_argument("--subset", default="smoke", choices=("smoke", "overfit", "quick", "medium", "strong", "full"))
@@ -104,31 +144,32 @@ def parse_args():
     parser.add_argument("--multi-scale", action="store_true")
     parser.add_argument("--expanded-scales", action="store_true")
     parser.add_argument("--aug-preset", default="default", choices=tuple(AUG_PRESETS))
-    parser.add_argument("--resolution", type=int, default=DEFAULT_RESOLUTION)
-    parser.add_argument("--dec-layers", type=int, default=DEFAULT_DEC_LAYERS)
-    parser.add_argument("--num-queries", type=int, default=DEFAULT_NUM_QUERIES)
-    parser.add_argument("--num-select", type=int, default=DEFAULT_NUM_SELECT)
+    parser.add_argument("--resolution", type=int, default=640)
+    parser.add_argument("--dec-layers", type=int, default=4)
+    parser.add_argument("--num-queries", type=int, default=300)
+    parser.add_argument("--num-select", type=int, default=300)
     parser.add_argument("--group-detr", type=int, default=13)
-    parser.add_argument("--lr", type=float, default=DEFAULT_LR)
-    parser.add_argument("--lr-encoder", type=float, default=DEFAULT_LR_ENCODER)
-    parser.add_argument("--weight-decay", type=float, default=DEFAULT_WEIGHT_DECAY)
-    parser.add_argument("--lr-vit-layer-decay", type=float, default=DEFAULT_LR_VIT_LAYER_DECAY)
-    parser.add_argument("--lr-component-decay", type=float, default=DEFAULT_LR_COMPONENT_DECAY)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--lr-encoder", type=float, default=1.5e-4)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--lr-vit-layer-decay", type=float, default=0.8)
+    parser.add_argument("--lr-component-decay", type=float, default=0.7)
     parser.add_argument(
         "--projector-scale",
         nargs="+",
-        default=DEFAULT_PROJECTOR_SCALE,
+        default=["P4"],
         choices=("P3", "P4", "P5"),
         help="Feature levels produced by MultiScaleProjector and consumed by the decoder.",
     )
+    
     parser.add_argument("--eval-max-dets", type=int, default=100)
     parser.add_argument("--use-cdn", action="store_true")
-    parser.add_argument("--dn-number", type=int, default=100)
+    parser.add_argument("--dn-number", type=int, default=50)
     parser.add_argument("--dn-label-noise-scale", type=float, default=0.5)
-    parser.add_argument("--dn-box-noise-scale", type=float, default=1.0)
+    parser.add_argument("--dn-box-noise-scale", type=float, default=0.6)
     parser.add_argument("--no-dn-negative", dest="dn_negative", action="store_false")
     parser.set_defaults(dn_negative=True)
-    parser.add_argument("--dn-loss-coef", type=float, default=1.0)
+    parser.add_argument("--dn-loss-coef", type=float, default=0.5)
     parser.add_argument("--dn-neg-loss-coef", type=float, default=1.0)
     parser.add_argument("--use-ema", action="store_true")
     parser.add_argument("--tensorboard", action="store_true")
@@ -150,11 +191,7 @@ def main():
             subset_path = Path("/data/cpc/root/dataset/COCO")
     else:
         subset_path = data_root / args.subset
-    output_dir = args.output_dir
-    if output_dir is None:
-        output_dir = PROJECT_ROOT / "output" / f"coco_{args.subset}_dinov3_vits16"
-    else:
-        output_dir = Path(output_dir)
+    output_dir = make_output_dir(args)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     model = RFDETRDINOv3(

@@ -323,8 +323,19 @@ class Transformer(nn.Module):
                 refpoint_embed = torch.concat([refpoint_embed_ts_subset, refpoint_embed_subset], dim=-2)
 
             if dn_query_feat is not None:
-                tgt = torch.cat([dn_query_feat, tgt], dim=1)
-                refpoint_embed = torch.cat([dn_refpoint_embed, refpoint_embed], dim=1)
+                group_detr = self.group_detr if self.training else 1
+                if group_detr > 1:
+                    normal_queries_per_group = tgt.shape[1] // group_detr
+                    dn_queries_per_group = dn_query_feat.shape[1] // group_detr
+                    tgt = tgt.view(bs, group_detr, normal_queries_per_group, self.d_model)
+                    refpoint_embed = refpoint_embed.view(bs, group_detr, normal_queries_per_group, -1)
+                    dn_query_feat = dn_query_feat.view(bs, group_detr, dn_queries_per_group, self.d_model)
+                    dn_refpoint_embed = dn_refpoint_embed.view(bs, group_detr, dn_queries_per_group, -1)
+                    tgt = torch.cat([dn_query_feat, tgt], dim=2).flatten(1, 2)
+                    refpoint_embed = torch.cat([dn_refpoint_embed, refpoint_embed], dim=2).flatten(1, 2)
+                else:
+                    tgt = torch.cat([dn_query_feat, tgt], dim=1)
+                    refpoint_embed = torch.cat([dn_refpoint_embed, refpoint_embed], dim=1)
 
             hs, references = self.decoder(
                 tgt,
