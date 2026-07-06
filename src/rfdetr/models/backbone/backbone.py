@@ -55,6 +55,9 @@ class Backbone(BackboneBase):
         patch_size: int = 14,
         num_windows: int = 4,
         positional_encoding_size: int = 0,
+        register_border_tokens: int = 0,
+        register_fill: str = "randn",
+        register_noise_std: float = 1.0,
     ):
         super().__init__()
         self.name = name
@@ -66,6 +69,9 @@ class Backbone(BackboneBase):
             out_feature_indexes=out_feature_indexes,
             pretrained_encoder=pretrained_encoder,
             load_pretrained=load_encoder_weights,
+            register_border_tokens=register_border_tokens,
+            register_fill=register_fill,
+            register_noise_std=register_noise_std,
         )
         # build encoder + projector as backbone module
         if freeze_encoder:

@@ -185,8 +185,22 @@ class Model:
             # e.g., when load object365 pretrain, do not load `class_embed.[weight, bias]`
             if args.pretrain_exclude_keys is not None:
                 assert isinstance(args.pretrain_exclude_keys, list)
+                removed_keys = []
                 for exclude_key in args.pretrain_exclude_keys:
-                    checkpoint["model"].pop(exclude_key)
+                    if exclude_key.endswith("*"):
+                        prefix = exclude_key[:-1]
+                        keys_to_remove = [key for key in checkpoint["model"] if key.startswith(prefix)]
+                    else:
+                        keys_to_remove = [exclude_key] if exclude_key in checkpoint["model"] else []
+                    for key in keys_to_remove:
+                        checkpoint["model"].pop(key)
+                    removed_keys.extend(keys_to_remove)
+                if removed_keys:
+                    logger.info(
+                        "Excluded %d keys from pretrain checkpoint. First excluded keys: %s",
+                        len(removed_keys),
+                        removed_keys[:5],
+                    )
             if args.pretrain_keys_modify_to_load is not None:
                 from rfdetr.util.obj365_to_coco_model import get_coco_pretrain_from_obj365
 
@@ -207,7 +221,16 @@ class Model:
                 if any(name.endswith(x) for x in query_param_names):
                     checkpoint["model"][name] = state[:num_desired_queries]
 
-            self.model.load_state_dict(checkpoint["model"], strict=False)
+            incompatible = self.model.load_state_dict(checkpoint["model"], strict=False)
+            logger.info(
+                "Loaded pretrain checkpoint with %d missing keys and %d unexpected keys.",
+                len(incompatible.missing_keys),
+                len(incompatible.unexpected_keys),
+            )
+            if incompatible.missing_keys:
+                logger.info("First missing keys: %s", incompatible.missing_keys[:10])
+            if incompatible.unexpected_keys:
+                logger.info("First unexpected keys: %s", incompatible.unexpected_keys[:10])
 
         if args.backbone_lora:
             logger.info("Applying LORA to backbone")
@@ -1233,6 +1256,9 @@ def populate_args(
     dn_negative=True,
     dn_loss_coef=1.0,
     dn_neg_loss_coef=1.0,
+    register_border_tokens=0,
+    register_fill="randn",
+    register_noise_std=1.0,
     # Dataset parameters
     dataset_file="coco",
     coco_path=None,
@@ -1350,6 +1376,9 @@ def populate_args(
         dn_negative=dn_negative,
         dn_loss_coef=dn_loss_coef,
         dn_neg_loss_coef=dn_neg_loss_coef,
+        register_border_tokens=register_border_tokens,
+        register_fill=register_fill,
+        register_noise_std=register_noise_std,
         dataset_file=dataset_file,
         coco_path=coco_path,
         dataset_dir=dataset_dir,

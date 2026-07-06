@@ -1,8 +1,10 @@
 import argparse
 import os
+import random
 import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 
 
@@ -32,6 +34,7 @@ DEFAULT_EPOCHS = {
     "full": 24,
 }
 DEFAULT_ENCODER = "dinov3_small"
+DEFAULT_RF_DETR_MEDIUM_WEIGHTS = PROJECT_ROOT.parent / "RF-DETR" / "fast" / "rf-detr-medium.pth"
 AUG_PRESETS = {
     "default": AUG_CONFIG,
     "conservative": AUG_CONSERVATIVE,
@@ -62,6 +65,15 @@ def setup_distributed_device(device):
     torch.cuda.set_device(get_local_rank())
 
 
+def set_seed(seed):
+    rank_seed = seed + get_rank()
+    random.seed(rank_seed)
+    np.random.seed(rank_seed)
+    torch.manual_seed(rank_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(rank_seed)
+
+
 def log_main(message):
     if is_main_process():
         print(message, flush=True)
@@ -89,6 +101,14 @@ def make_output_dir(args):
         run_tags.append("ms")
     if args.expanded_scales:
         run_tags.append("expanded")
+    if args.backbone_register_border_tokens > 0:
+        run_tags.extend(
+            [
+                f"regb{args.backbone_register_border_tokens}",
+                args.backbone_register_fill,
+                f"std{args.backbone_register_noise_std:g}",
+            ]
+        )
     if args.aug_preset != "default":
         run_tags.append(f"aug{args.aug_preset}")
     if args.use_cdn:
@@ -126,6 +146,7 @@ def parse_args():
     parser.add_argument("--grad-accum-steps", type=int, default=1)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--world-size", type=int, default=int(os.environ.get("WORLD_SIZE", "1")))
     parser.add_argument("--dist-url", default="env://")
     parser.add_argument("--sync-bn", action=argparse.BooleanOptionalAction, default=True)
@@ -139,6 +160,13 @@ def parse_args():
     parser.add_argument("--data-root", default="/data/cpc/root/dataset/COCO_RFDETR_TEST")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--pretrained-encoder", default=None)
+    parser.add_argument(
+        "--detector-pretrain-weights",
+        default=None,
+        help="Optional full detector checkpoint loaded after DINOv3 backbone init. "
+        f"For the RF-DETR Medium backbone-swap ablation, use {DEFAULT_RF_DETR_MEDIUM_WEIGHTS}.",
+    )
     parser.add_argument("--eval-only", action="store_true")
     parser.add_argument("--run-test", action="store_true")
     parser.add_argument("--multi-scale", action="store_true")
@@ -151,6 +179,8 @@ def parse_args():
     parser.add_argument("--group-detr", type=int, default=13)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--lr-encoder", type=float, default=1.5e-4)
+    parser.add_argument("--lr-drop", type=int, default=100)
+    parser.add_argument("--warmup-epochs", type=float, default=0.0)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--lr-vit-layer-decay", type=float, default=0.8)
     parser.add_argument("--lr-component-decay", type=float, default=0.7)
@@ -171,6 +201,14 @@ def parse_args():
     parser.set_defaults(dn_negative=True)
     parser.add_argument("--dn-loss-coef", type=float, default=0.5)
     parser.add_argument("--dn-neg-loss-coef", type=float, default=1.0)
+    parser.add_argument(
+        "--backbone-register-border-tokens",
+        type=int,
+        default=0,
+        help="Patch-token border added around the image inside the DINOv3 backbone and cropped before projector.",
+    )
+    parser.add_argument("--backbone-register-fill", default="randn", choices=("randn", "rand", "zero"))
+    parser.add_argument("--backbone-register-noise-std", type=float, default=1.0)
     parser.add_argument("--use-ema", action="store_true")
     parser.add_argument("--tensorboard", action="store_true")
     parser.add_argument("--progress-bar", action="store_true")
@@ -180,6 +218,7 @@ def parse_args():
 def main():
     args = parse_args()
     setup_distributed_device(args.device)
+    set_seed(args.seed)
 
     data_root = Path(args.data_root)
     if args.subset == "full":
@@ -196,7 +235,9 @@ def main():
 
     model = RFDETRDINOv3(
         encoder=DEFAULT_ENCODER,
-        pretrain_weights=None,
+        pretrained_encoder=args.pretrained_encoder,
+        pretrain_weights=args.detector_pretrain_weights,
+        pretrain_exclude_keys=["backbone.0.encoder.*"] if args.detector_pretrain_weights else None,
         resolution=args.resolution,
         dec_layers=args.dec_layers,
         num_queries=args.num_queries,
@@ -209,15 +250,23 @@ def main():
         dn_label_noise_scale=args.dn_label_noise_scale,
         dn_box_noise_scale=args.dn_box_noise_scale,
         dn_negative=args.dn_negative,
+        register_border_tokens=args.backbone_register_border_tokens,
+        register_fill=args.backbone_register_fill,
+        register_noise_std=args.backbone_register_noise_std,
     )
 
     log_main(f"project_root={PROJECT_ROOT}")
     log_main(f"subset_path={subset_path}")
     log_main(f"output_dir={output_dir}")
     log_main(f"model=RFDETRDINOv3, encoder={DEFAULT_ENCODER}")
+    log_main(f"pretrained_encoder={args.pretrained_encoder}")
+    log_main(f"detector_pretrain_weights={args.detector_pretrain_weights}")
+    if args.detector_pretrain_weights:
+        log_main("detector_pretrain_exclude_keys=['backbone.0.encoder.*']")
     log_main(f"distributed_world_size={args.world_size}")
     log_main(f"dist_url={args.dist_url}")
     log_main(f"sync_bn={args.sync_bn}")
+    log_main(f"seed={args.seed}")
     log_main(f"resolution={args.resolution}")
     log_main(f"dec_layers={args.dec_layers}")
     log_main(f"num_queries={args.num_queries}")
@@ -226,6 +275,8 @@ def main():
     log_main(f"projector_scale={args.projector_scale}")
     log_main(f"lr={args.lr}")
     log_main(f"lr_encoder={args.lr_encoder}")
+    log_main(f"lr_drop={args.lr_drop}")
+    log_main(f"warmup_epochs={args.warmup_epochs}")
     log_main(f"weight_decay={args.weight_decay}")
     log_main(f"lr_vit_layer_decay={args.lr_vit_layer_decay}")
     log_main(f"lr_component_decay={args.lr_component_decay}")
@@ -237,6 +288,9 @@ def main():
     log_main(f"use_cdn={args.use_cdn}")
     log_main(f"dn_number={args.dn_number}")
     log_main(f"dn_negative={args.dn_negative}")
+    log_main(f"backbone_register_border_tokens={args.backbone_register_border_tokens}")
+    log_main(f"backbone_register_fill={args.backbone_register_fill}")
+    log_main(f"backbone_register_noise_std={args.backbone_register_noise_std}")
 
     model.train(
         dataset_file="coco",
@@ -251,7 +305,9 @@ def main():
         sync_bn=args.sync_bn,
         num_workers=args.num_workers,
         output_dir=str(output_dir),
+        seed=args.seed,
         resume=args.resume,
+        pretrained_encoder=args.pretrained_encoder,
         eval=args.eval_only,
         resolution=args.resolution,
         dec_layers=args.dec_layers,
@@ -262,6 +318,8 @@ def main():
         positional_encoding_size=args.resolution // 16,
         lr=args.lr,
         lr_encoder=args.lr_encoder,
+        lr_drop=args.lr_drop,
+        warmup_epochs=args.warmup_epochs,
         weight_decay=args.weight_decay,
         lr_vit_layer_decay=args.lr_vit_layer_decay,
         lr_component_decay=args.lr_component_decay,
@@ -279,6 +337,9 @@ def main():
         dn_negative=args.dn_negative,
         dn_loss_coef=args.dn_loss_coef,
         dn_neg_loss_coef=args.dn_neg_loss_coef,
+        register_border_tokens=args.backbone_register_border_tokens,
+        register_fill=args.backbone_register_fill,
+        register_noise_std=args.backbone_register_noise_std,
         progress_bar=args.progress_bar,
     )
 

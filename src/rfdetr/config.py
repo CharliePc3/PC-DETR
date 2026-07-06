@@ -63,6 +63,8 @@ class ModelConfig(BaseConfig):
     amp: bool = True
     num_classes: int = 90
     pretrain_weights: Optional[str] = None
+    pretrain_exclude_keys: Optional[List[str]] = None
+    pretrain_keys_modify_to_load: Optional[List[str]] = None
     pretrained_encoder: Optional[str] = None
     device: Literal["cpu", "cuda", "mps"] = DEVICE
     resolution: int
@@ -78,6 +80,9 @@ class ModelConfig(BaseConfig):
     dn_negative: bool = True
     dn_loss_coef: float = 1.0
     dn_neg_loss_coef: float = 1.0
+    register_border_tokens: int = 0
+    register_fill: Literal["randn", "rand", "zero"] = "randn"
+    register_noise_std: float = 1.0
     segmentation_head: bool = False
     mask_downsample_ratio: int = 4
     license: str = "Apache-2.0"

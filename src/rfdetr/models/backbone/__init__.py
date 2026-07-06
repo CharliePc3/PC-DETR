@@ -70,6 +70,9 @@ def build_backbone(
     patch_size,
     num_windows,
     positional_encoding_size,
+    register_border_tokens=0,
+    register_fill="randn",
+    register_noise_std=1.0,
 ):
     """
     Useful args:
@@ -100,6 +103,9 @@ def build_backbone(
         patch_size=patch_size,
         num_windows=num_windows,
         positional_encoding_size=positional_encoding_size,
+        register_border_tokens=register_border_tokens,
+        register_fill=register_fill,
+        register_noise_std=register_noise_std,
     )
 
     model = Joiner(backbone, position_embedding)

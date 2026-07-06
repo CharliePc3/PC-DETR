@@ -95,14 +95,26 @@ class DinoV3Backbone(nn.Module):
         out_feature_indexes: list[int] | None = None,
         pretrained_encoder: str | None = None,
         load_pretrained: bool = True,
+        register_border_tokens: int = 0,
+        register_fill: str = "randn",
+        register_noise_std: float = 1.0,
     ):
         super().__init__()
         if out_feature_indexes is None:
             out_feature_indexes = [2, 5, 8, 11]
         if size not in SIZE_TO_MODEL:
             raise ValueError(f"Unsupported DINOv3 size '{size}'. Available: {sorted(SIZE_TO_MODEL)}")
+        if register_border_tokens < 0:
+            raise ValueError("register_border_tokens must be non-negative.")
+        if register_fill not in {"randn", "rand", "zero"}:
+            raise ValueError("register_fill must be one of: randn, rand, zero.")
+        if register_noise_std < 0:
+            raise ValueError("register_noise_std must be non-negative.")
 
         self.out_feature_indexes = out_feature_indexes
+        self.register_border_tokens = register_border_tokens
+        self.register_fill = register_fill
+        self.register_noise_std = register_noise_std
         model_name = SIZE_TO_MODEL[size]
 
         builder = _load_dinov3_backbone_builder(model_name)
@@ -118,17 +130,46 @@ class DinoV3Backbone(nn.Module):
         self.patch_size = self.encoder.patch_size
         self._out_feature_channels = [self.encoder.embed_dim for _ in out_feature_indexes]
 
+    def _surround_with_register_border(self, x: torch.Tensor) -> torch.Tensor:
+        border_tokens = self.register_border_tokens
+        if border_tokens == 0:
+            return x
+
+        pad_px = border_tokens * self.patch_size
+        batch_size, channels, height, width = x.shape
+        canvas_shape = (batch_size, channels, height + 2 * pad_px, width + 2 * pad_px)
+
+        generator = None
+        if not self.training and self.register_fill in {"randn", "rand"}:
+            generator = torch.Generator(device=x.device)
+            generator.manual_seed(0)
+
+        if self.register_fill == "randn":
+            canvas = torch.randn(canvas_shape, device=x.device, dtype=x.dtype, generator=generator) * self.register_noise_std
+        elif self.register_fill == "rand":
+            canvas = torch.rand(canvas_shape, device=x.device, dtype=x.dtype, generator=generator)
+        else:
+            canvas = torch.zeros(canvas_shape, device=x.device, dtype=x.dtype)
+
+        canvas[:, :, pad_px : pad_px + height, pad_px : pad_px + width] = x
+        return canvas
+
     def forward(self, x):
         height, width = x.shape[-2:]
         assert height % self.patch_size == 0 and width % self.patch_size == 0, (
             f"DINOv3 requires input height/width to be divisible by patch size {self.patch_size}, "
             f"but got {tuple(x.shape)}"
         )
-        return list(
+        encoder_input = self._surround_with_register_border(x)
+        features = list(
             self.encoder.get_intermediate_layers(
-                x,
+                encoder_input,
                 n=self.out_feature_indexes,
                 reshape=True,
                 return_class_token=False,
             )
         )
+        border_tokens = self.register_border_tokens
+        if border_tokens > 0:
+            features = [feature[:, :, border_tokens:-border_tokens, border_tokens:-border_tokens] for feature in features]
+        return features
