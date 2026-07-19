@@ -98,6 +98,14 @@ def make_output_dir(args):
         f"{scale_tag}",
         "idx" + "-".join(str(index) for index in args.out_feature_indexes),
     ]
+    if args.projector_type == "sdsr":
+        run_tags.extend(["sdsr", f"dc{args.sdsr_detail_channels}"])
+        if not args.sdsr_use_local_reassembly:
+            run_tags.append("nolocal")
+        if not args.sdsr_use_directional_guide:
+            run_tags.append("nodir")
+        if not args.sdsr_use_phase_downsample:
+            run_tags.append("nophase")
     if args.multi_scale:
         run_tags.append("ms")
     if args.expanded_scales:
@@ -187,7 +195,8 @@ def parse_args():
     parser.add_argument(
         "--detector-pretrain-exclude-projector",
         action="store_true",
-        help="When loading detector_pretrain_weights, also skip backbone.0.projector.* so the projector is reinitialized.",
+        help="When loading detector_pretrain_weights, also skip backbone.0.projector.* so the projector is reinitialized. "
+        "This is automatic when projector_type is not multiscale.",
     )
     parser.add_argument("--eval-only", action="store_true")
     parser.add_argument("--run-test", action="store_true")
@@ -211,7 +220,18 @@ def parse_args():
         nargs="+",
         default=["P4"],
         choices=("P3", "P4", "P5"),
-        help="Feature levels produced by MultiScaleProjector and consumed by the decoder.",
+        help="Feature levels produced by the projector and consumed by the decoder.",
+    )
+    parser.add_argument("--projector-type", default="multiscale", choices=("multiscale", "sdsr"))
+    parser.add_argument("--sdsr-detail-channels", type=int, default=32)
+    parser.add_argument(
+        "--sdsr-use-local-reassembly", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--sdsr-use-directional-guide", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--sdsr-use-phase-downsample", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
         "--out-feature-indexes",
@@ -294,6 +314,11 @@ def main():
         raise ValueError("out_feature_indexes must be unique and in ascending order.")
     if args.out_feature_indexes[0] < 0 or args.out_feature_indexes[-1] >= 12:
         raise ValueError("DINOv3-S has 12 blocks, so out_feature_indexes must be in [0, 11].")
+    if args.projector_type == "sdsr":
+        if args.sdsr_detail_channels < 8 or args.sdsr_detail_channels % 4 != 0:
+            raise ValueError("SDSR detail channels must be at least 8 and divisible by 4.")
+        if args.sdsr_use_directional_guide and not args.sdsr_use_local_reassembly:
+            log_main("SDSR directional guide is inactive because local reassembly is disabled.")
     if args.use_budgeted_sa:
         if args.group_detr <= 1:
             raise ValueError("Budgeted SA requires group_detr > 1.")
@@ -344,7 +369,7 @@ def main():
     pretrain_exclude_keys = None
     if args.detector_pretrain_weights:
         pretrain_exclude_keys = ["backbone.0.encoder.*"]
-        if args.detector_pretrain_exclude_projector:
+        if args.detector_pretrain_exclude_projector or args.projector_type != "multiscale":
             pretrain_exclude_keys.append("backbone.0.projector.*")
 
     model = RFDETRDINOv3(
@@ -359,6 +384,11 @@ def main():
         group_detr=args.group_detr,
         out_feature_indexes=args.out_feature_indexes,
         projector_scale=args.projector_scale,
+        projector_type=args.projector_type,
+        sdsr_detail_channels=args.sdsr_detail_channels,
+        sdsr_use_local_reassembly=args.sdsr_use_local_reassembly,
+        sdsr_use_directional_guide=args.sdsr_use_directional_guide,
+        sdsr_use_phase_downsample=args.sdsr_use_phase_downsample,
         positional_encoding_size=args.resolution // 16,
         use_cdn=args.use_cdn,
         dn_number=args.dn_number,
@@ -391,6 +421,11 @@ def main():
     log_main(f"group_detr={args.group_detr}")
     log_main(f"out_feature_indexes={args.out_feature_indexes}")
     log_main(f"projector_scale={args.projector_scale}")
+    log_main(f"projector_type={args.projector_type}")
+    log_main(f"sdsr_detail_channels={args.sdsr_detail_channels}")
+    log_main(f"sdsr_use_local_reassembly={args.sdsr_use_local_reassembly}")
+    log_main(f"sdsr_use_directional_guide={args.sdsr_use_directional_guide}")
+    log_main(f"sdsr_use_phase_downsample={args.sdsr_use_phase_downsample}")
     log_main(f"lr={args.lr}")
     log_main(f"lr_encoder={args.lr_encoder}")
     log_main(f"lr_drop={args.lr_drop}")
@@ -401,7 +436,6 @@ def main():
     log_main(f"multi_scale={args.multi_scale}")
     log_main(f"expanded_scales={args.expanded_scales}")
     log_main(f"aug_preset={args.aug_preset}")
-    log_main(f"projector_type={getattr(model.model_config, 'projector_type', 'multiscale')}")
     log_main(f"eval_max_dets={args.eval_max_dets}")
     log_main(f"use_cdn={args.use_cdn}")
     log_main(f"dn_number={args.dn_number}")
@@ -458,6 +492,11 @@ def main():
         group_detr=args.group_detr,
         out_feature_indexes=args.out_feature_indexes,
         projector_scale=args.projector_scale,
+        projector_type=args.projector_type,
+        sdsr_detail_channels=args.sdsr_detail_channels,
+        sdsr_use_local_reassembly=args.sdsr_use_local_reassembly,
+        sdsr_use_directional_guide=args.sdsr_use_directional_guide,
+        sdsr_use_phase_downsample=args.sdsr_use_phase_downsample,
         positional_encoding_size=args.resolution // 16,
         lr=args.lr,
         lr_encoder=args.lr_encoder,

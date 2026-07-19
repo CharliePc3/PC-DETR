@@ -1102,6 +1102,11 @@ def build_model(args):
         register_noise_std=args.register_noise_std,
         feature_adapter=args.feature_adapter,
         feature_adapter_init_scale=args.feature_adapter_init_scale,
+        projector_type=args.projector_type,
+        sdsr_detail_channels=args.sdsr_detail_channels,
+        sdsr_use_local_reassembly=args.sdsr_use_local_reassembly,
+        sdsr_use_directional_guide=args.sdsr_use_directional_guide,
+        sdsr_use_phase_downsample=args.sdsr_use_phase_downsample,
     )
     if args.encoder_only:
         return backbone[0].encoder, None, None

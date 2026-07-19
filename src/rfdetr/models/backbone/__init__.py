@@ -75,6 +75,11 @@ def build_backbone(
     register_noise_std=1.0,
     feature_adapter="none",
     feature_adapter_init_scale=1.0,
+    projector_type="multiscale",
+    sdsr_detail_channels=32,
+    sdsr_use_local_reassembly=True,
+    sdsr_use_directional_guide=True,
+    sdsr_use_phase_downsample=True,
 ):
     """
     Useful args:
@@ -110,6 +115,11 @@ def build_backbone(
         register_noise_std=register_noise_std,
         feature_adapter=feature_adapter,
         feature_adapter_init_scale=feature_adapter_init_scale,
+        projector_type=projector_type,
+        sdsr_detail_channels=sdsr_detail_channels,
+        sdsr_use_local_reassembly=sdsr_use_local_reassembly,
+        sdsr_use_directional_guide=sdsr_use_directional_guide,
+        sdsr_use_phase_downsample=sdsr_use_phase_downsample,
     )
 
     model = Joiner(backbone, position_embedding)

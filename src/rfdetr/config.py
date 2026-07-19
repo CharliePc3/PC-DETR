@@ -51,6 +51,11 @@ class ModelConfig(BaseConfig):
     dec_layers: int
     two_stage: bool = True
     projector_scale: List[Literal["P3", "P4", "P5"]]
+    projector_type: Literal["multiscale", "sdsr"] = "multiscale"
+    sdsr_detail_channels: int = 32
+    sdsr_use_local_reassembly: bool = True
+    sdsr_use_directional_guide: bool = True
+    sdsr_use_phase_downsample: bool = True
     hidden_dim: int
     patch_size: int
     num_windows: int
@@ -353,6 +358,11 @@ class TrainConfig(BaseModel):
     early_stopping_use_ema: bool = False
     feature_adapter: Literal["none", "residual_ln_1x1", "ln_1x1"] = "none"
     feature_adapter_init_scale: float = 1.0
+    projector_type: Literal["multiscale", "sdsr"] = "multiscale"
+    sdsr_detail_channels: int = 32
+    sdsr_use_local_reassembly: bool = True
+    sdsr_use_directional_guide: bool = True
+    sdsr_use_phase_downsample: bool = True
     progress_bar: bool = False  # Enable tqdm progress bars during training and evaluation epochs.
     tensorboard: bool = True
     wandb: bool = False

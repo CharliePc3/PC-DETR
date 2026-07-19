@@ -24,6 +24,7 @@ from peft import PeftModel
 from rfdetr.models.backbone.base import BackboneBase
 from rfdetr.models.backbone.dinov3 import DinoV3Backbone
 from rfdetr.models.backbone.projector import MultiScaleProjector
+from rfdetr.models.backbone.semantic_reassembly_projector import ScaleDecoupledReassemblyProjector
 from rfdetr.util.logger import get_logger
 from rfdetr.util.misc import NestedTensor
 
@@ -60,6 +61,11 @@ class Backbone(BackboneBase):
         register_noise_std: float = 1.0,
         feature_adapter: str = "none",
         feature_adapter_init_scale: float = 1.0,
+        projector_type: str = "multiscale",
+        sdsr_detail_channels: int = 32,
+        sdsr_use_local_reassembly: bool = True,
+        sdsr_use_directional_guide: bool = True,
+        sdsr_use_phase_downsample: bool = True,
     ):
         super().__init__()
         self.name = name
@@ -88,16 +94,29 @@ class Backbone(BackboneBase):
         assert sorted(self.projector_scale) == self.projector_scale, (
             "only support projector scale P3/P4/P5/P6 in ascending order."
         )
-        level2scalefactor = dict(P3=2.0, P4=1.0, P5=0.5, P6=0.25)
-        scale_factors = [level2scalefactor[lvl] for lvl in self.projector_scale]
-
-        self.projector = MultiScaleProjector(
-            in_channels=self.encoder._out_feature_channels,
-            out_channels=out_channels,
-            scale_factors=scale_factors,
-            layer_norm=layer_norm,
-            rms_norm=rms_norm,
-        )
+        self.projector_type = projector_type
+        if projector_type == "multiscale":
+            level2scalefactor = dict(P3=2.0, P4=1.0, P5=0.5, P6=0.25)
+            scale_factors = [level2scalefactor[lvl] for lvl in self.projector_scale]
+            self.projector = MultiScaleProjector(
+                in_channels=self.encoder._out_feature_channels,
+                out_channels=out_channels,
+                scale_factors=scale_factors,
+                layer_norm=layer_norm,
+                rms_norm=rms_norm,
+            )
+        elif projector_type == "sdsr":
+            self.projector = ScaleDecoupledReassemblyProjector(
+                in_channels=self.encoder._out_feature_channels,
+                out_channels=out_channels,
+                levels=self.projector_scale,
+                detail_channels=sdsr_detail_channels,
+                use_local_reassembly=sdsr_use_local_reassembly,
+                use_directional_guide=sdsr_use_directional_guide,
+                use_phase_downsample=sdsr_use_phase_downsample,
+            )
+        else:
+            raise ValueError(f"Unsupported projector_type: {projector_type}")
 
         self._export = False
 
@@ -114,7 +133,10 @@ class Backbone(BackboneBase):
         """ """
         # (H, W, B, C)
         feats = self.encoder(tensor_list.tensors)
-        feats = self.projector(feats)
+        if self.projector_type == "sdsr":
+            feats = self.projector(feats, image=tensor_list.tensors, mask=tensor_list.mask)
+        else:
+            feats = self.projector(feats)
         # x: [(B, C, H, W)]
         out = []
         for feat in feats:
@@ -126,7 +148,10 @@ class Backbone(BackboneBase):
 
     def forward_export(self, tensors: torch.Tensor):
         feats = self.encoder(tensors)
-        feats = self.projector(feats)
+        if self.projector_type == "sdsr":
+            feats = self.projector(feats, image=tensors)
+        else:
+            feats = self.projector(feats)
         out_feats = []
         out_masks = []
         for feat in feats:

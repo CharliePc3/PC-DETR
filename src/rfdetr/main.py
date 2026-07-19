@@ -1068,6 +1068,16 @@ def get_args_parser():
     parser.add_argument("--group_detr", default=13, type=int, help="Number of groups to speed up detr training")
     parser.add_argument("--two_stage", action="store_true")
     parser.add_argument("--projector_scale", default="P4", type=str, nargs="+", choices=("P3", "P4", "P5", "P6"))
+    parser.add_argument("--projector_type", default="multiscale", choices=("multiscale", "sdsr"))
+    parser.add_argument("--sdsr_detail_channels", default=32, type=int)
+    parser.add_argument("--sdsr_no_local_reassembly", dest="sdsr_use_local_reassembly", action="store_false")
+    parser.add_argument("--sdsr_no_directional_guide", dest="sdsr_use_directional_guide", action="store_false")
+    parser.add_argument("--sdsr_no_phase_downsample", dest="sdsr_use_phase_downsample", action="store_false")
+    parser.set_defaults(
+        sdsr_use_local_reassembly=True,
+        sdsr_use_directional_guide=True,
+        sdsr_use_phase_downsample=True,
+    )
     parser.add_argument("--lite_refpoint_refine", action="store_true", help="lite refpoint refine mode for speed-up")
     parser.add_argument("--num_select", default=100, type=int, help="the number of predictions selected for evaluation")
     parser.add_argument("--dec_n_points", default=4, type=int, help="the number of sampling points")
@@ -1270,6 +1280,11 @@ def populate_args(
     group_detr=13,
     two_stage=False,
     projector_scale="P4",
+    projector_type="multiscale",
+    sdsr_detail_channels=32,
+    sdsr_use_local_reassembly=True,
+    sdsr_use_directional_guide=True,
+    sdsr_use_phase_downsample=True,
     lite_refpoint_refine=False,
     num_select=100,
     dec_n_points=4,
@@ -1410,6 +1425,11 @@ def populate_args(
         group_detr=group_detr,
         two_stage=two_stage,
         projector_scale=projector_scale,
+        projector_type=projector_type,
+        sdsr_detail_channels=sdsr_detail_channels,
+        sdsr_use_local_reassembly=sdsr_use_local_reassembly,
+        sdsr_use_directional_guide=sdsr_use_directional_guide,
+        sdsr_use_phase_downsample=sdsr_use_phase_downsample,
         lite_refpoint_refine=lite_refpoint_refine,
         num_select=num_select,
         dec_n_points=dec_n_points,
