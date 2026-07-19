@@ -10,4 +10,8 @@ weights/
 ckpts/
 wandb/
 runs/
+*.pid
+*.lock
+nohup.out
+tmp_objects365_manifest/
 .DS_Store

@@ -31,6 +31,40 @@ SIZE_TO_MODEL = {
 }
 
 
+class ResidualFeatureAdapter(nn.Module):
+    """A conservative per-level adapter for aligning DINOv3 features to the detector.
+
+    The residual branch is zero-initialized, so enabling this adapter starts as an
+    exact identity mapping and lets training learn only the correction it needs.
+    """
+
+    def __init__(self, channels: int, init_scale: float = 1.0):
+        super().__init__()
+        self.norm = nn.LayerNorm(channels, eps=1e-6)
+        self.proj = nn.Conv2d(channels, channels, kernel_size=1)
+        self.scale = nn.Parameter(torch.tensor(float(init_scale)))
+        nn.init.zeros_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        return x + self.scale * self.proj(residual)
+
+
+class LNConvFeatureAdapter(nn.Module):
+    """A non-residual LayerNorm + 1x1 adapter for stronger feature remapping."""
+
+    def __init__(self, channels: int, init_scale: float = 1.0):
+        super().__init__()
+        self.norm = nn.LayerNorm(channels, eps=1e-6)
+        self.proj = nn.Conv2d(channels, channels, kernel_size=1)
+        self.scale = nn.Parameter(torch.tensor(float(init_scale)))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        return self.scale * self.proj(x)
+
+
 def _load_dinov3_backbone_builder(model_name: str):
     try:
         from dinov3.hub import backbones
@@ -98,6 +132,8 @@ class DinoV3Backbone(nn.Module):
         register_border_tokens: int = 0,
         register_fill: str = "randn",
         register_noise_std: float = 1.0,
+        feature_adapter: str = "none",
+        feature_adapter_init_scale: float = 1.0,
     ):
         super().__init__()
         if out_feature_indexes is None:
@@ -110,16 +146,30 @@ class DinoV3Backbone(nn.Module):
             raise ValueError("register_fill must be one of: randn, rand, zero.")
         if register_noise_std < 0:
             raise ValueError("register_noise_std must be non-negative.")
+        if feature_adapter not in {"none", "residual_ln_1x1", "ln_1x1"}:
+            raise ValueError("feature_adapter must be one of: none, residual_ln_1x1, ln_1x1.")
 
         self.out_feature_indexes = out_feature_indexes
         self.register_border_tokens = register_border_tokens
         self.register_fill = register_fill
         self.register_noise_std = register_noise_std
+        self.feature_adapter_name = feature_adapter
         model_name = SIZE_TO_MODEL[size]
 
         builder = _load_dinov3_backbone_builder(model_name)
         logger.info("Building DINOv3 backbone: %s", model_name)
         self.encoder = builder(pretrained=False)
+
+        num_blocks = len(self.encoder.blocks)
+        if not out_feature_indexes:
+            raise ValueError("out_feature_indexes must contain at least one block index.")
+        if out_feature_indexes != sorted(set(out_feature_indexes)):
+            raise ValueError("out_feature_indexes must be unique and in ascending order.")
+        if out_feature_indexes[0] < 0 or out_feature_indexes[-1] >= num_blocks:
+            raise ValueError(
+                f"out_feature_indexes must be in [0, {num_blocks - 1}] for {model_name}, "
+                f"but got {out_feature_indexes}."
+            )
 
         if load_pretrained:
             weights_path = _resolve_weights_path(model_name, pretrained_encoder)
@@ -129,6 +179,18 @@ class DinoV3Backbone(nn.Module):
 
         self.patch_size = self.encoder.patch_size
         self._out_feature_channels = [self.encoder.embed_dim for _ in out_feature_indexes]
+        if feature_adapter == "residual_ln_1x1":
+            self.feature_adapters = nn.ModuleList(
+                ResidualFeatureAdapter(self.encoder.embed_dim, init_scale=feature_adapter_init_scale)
+                for _ in out_feature_indexes
+            )
+        elif feature_adapter == "ln_1x1":
+            self.feature_adapters = nn.ModuleList(
+                LNConvFeatureAdapter(self.encoder.embed_dim, init_scale=feature_adapter_init_scale)
+                for _ in out_feature_indexes
+            )
+        else:
+            self.feature_adapters = nn.ModuleList(nn.Identity() for _ in out_feature_indexes)
 
     def _surround_with_register_border(self, x: torch.Tensor) -> torch.Tensor:
         border_tokens = self.register_border_tokens
@@ -172,4 +234,5 @@ class DinoV3Backbone(nn.Module):
         border_tokens = self.register_border_tokens
         if border_tokens > 0:
             features = [feature[:, :, border_tokens:-border_tokens, border_tokens:-border_tokens] for feature in features]
+        features = [adapter(feature) for adapter, feature in zip(self.feature_adapters, features)]
         return features

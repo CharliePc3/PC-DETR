@@ -6,7 +6,7 @@
 
 
 import os
-from typing import Any, ClassVar, Dict, List, Literal, Mapping, Optional
+from typing import Any, ClassVar, Dict, List, Literal, Mapping, Optional, Tuple
 
 import torch
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -83,6 +83,8 @@ class ModelConfig(BaseConfig):
     register_border_tokens: int = 0
     register_fill: Literal["randn", "rand", "zero"] = "randn"
     register_noise_std: float = 1.0
+    feature_adapter: Literal["none", "residual_ln_1x1", "ln_1x1"] = "none"
+    feature_adapter_init_scale: float = 1.0
     segmentation_head: bool = False
     mask_downsample_ratio: int = 4
     license: str = "Apache-2.0"
@@ -318,6 +320,22 @@ class TrainConfig(BaseModel):
     dn_negative: bool = True
     dn_loss_coef: float = 1.0
     dn_neg_loss_coef: float = 1.0
+    use_budgeted_sa: bool = False
+    sa_start_epoch: int = 0
+    sa_stop_epoch: int = 0
+    sa_total_budgets: Tuple[int, int, int] = (6, 7, 9)
+    sa_area_thresholds: Tuple[float, float] = (32**2, 96**2)
+    use_dense_o2o: bool = False
+    dense_o2o_mode: Literal["image", "enhanced"] = "image"
+    dense_o2o_start_epoch: int = 2
+    dense_o2o_image_stop_epoch: int = 12
+    dense_o2o_copyblend_stop_epoch: int = 21
+    dense_o2o_mosaic_prob: float = 0.5
+    dense_o2o_mixup_prob: float = 0.5
+    dense_o2o_copyblend_prob: float = 0.5
+    dense_o2o_copyblend_area_threshold: float = 100.0
+    dense_o2o_copyblend_num_objects: int = 3
+    dense_o2o_copyblend_expand_ratios: Tuple[float, float] = (0.1, 0.25)
     num_select: int = 300
     dataset_file: Literal["coco", "o365", "roboflow", "yolo"] = "roboflow"
     square_resize_div_64: bool = True
@@ -333,6 +351,8 @@ class TrainConfig(BaseModel):
     early_stopping_patience: int = 10
     early_stopping_min_delta: float = 0.001
     early_stopping_use_ema: bool = False
+    feature_adapter: Literal["none", "residual_ln_1x1", "ln_1x1"] = "none"
+    feature_adapter_init_scale: float = 1.0
     progress_bar: bool = False  # Enable tqdm progress bars during training and evaluation epochs.
     tensorboard: bool = True
     wandb: bool = False

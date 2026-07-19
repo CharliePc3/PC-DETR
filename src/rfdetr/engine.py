@@ -29,6 +29,7 @@ from tqdm.auto import tqdm
 import rfdetr.util.misc as utils
 from rfdetr.datasets.coco import compute_multi_scale_scales
 from rfdetr.datasets.coco_eval import CocoEvaluator
+from rfdetr.datasets.dense_o2o import DenseO2OAugmenter
 from rfdetr.util.logger import get_logger
 from rfdetr.util.misc import get_world_size
 
@@ -112,6 +113,22 @@ def train_one_epoch(
 
     optimizer.zero_grad()
 
+    dense_o2o_augmenter = None
+    if getattr(args, "use_dense_o2o", False):
+        dense_o2o_augmenter = DenseO2OAugmenter(
+            mode=args.dense_o2o_mode,
+            start_epoch=args.dense_o2o_start_epoch,
+            image_stop_epoch=args.dense_o2o_image_stop_epoch,
+            copyblend_stop_epoch=args.dense_o2o_copyblend_stop_epoch,
+            mosaic_prob=args.dense_o2o_mosaic_prob,
+            mixup_prob=args.dense_o2o_mixup_prob,
+            copyblend_prob=args.dense_o2o_copyblend_prob,
+            copyblend_area_threshold=args.dense_o2o_copyblend_area_threshold,
+            copyblend_num_objects=args.dense_o2o_copyblend_num_objects,
+            copyblend_expand_ratios=args.dense_o2o_copyblend_expand_ratios,
+            seed=args.seed,
+        )
+
     # Check if batch size is divisible by gradient accumulation steps
     if batch_size % args.grad_accum_steps != 0:
         logger.error(
@@ -174,6 +191,18 @@ def train_one_epoch(
                     F.interpolate(samples.mask.unsqueeze(1).float(), size=scale, mode="nearest").squeeze(1).bool()
                 )
 
+        dense_o2o_stats = {}
+        if dense_o2o_augmenter is not None:
+            augmented_tensors, augmented_masks, targets, dense_o2o_stats = dense_o2o_augmenter(
+                samples.tensors,
+                samples.mask,
+                targets,
+                epoch=epoch,
+                step=data_iter_step,
+                rank=utils.get_rank(),
+            )
+            samples = NestedTensor(augmented_tensors, augmented_masks)
+
         for i in range(args.grad_accum_steps):
             start_idx = i * sub_batch_size
             final_idx = start_idx + sub_batch_size
@@ -219,6 +248,8 @@ def train_one_epoch(
             if epoch >= 0:
                 ema_m.update(model)
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
+        if dense_o2o_stats:
+            metric_logger.update(**dense_o2o_stats)
         metric_logger.update(class_error=loss_dict_reduced["class_error"])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 

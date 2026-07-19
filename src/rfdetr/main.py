@@ -514,6 +514,8 @@ class Model:
 
             model.train()
             criterion.train()
+            if hasattr(criterion, "set_epoch"):
+                criterion.set_epoch(epoch)
             train_stats = train_one_epoch(
                 model,
                 criterion,
@@ -918,6 +920,22 @@ if __name__ == "__main__":
             "use_varifocal_loss",
             "use_position_supervised_loss",
             "ia_bce_loss",
+            "use_budgeted_sa",
+            "sa_start_epoch",
+            "sa_stop_epoch",
+            "sa_total_budgets",
+            "sa_area_thresholds",
+            "use_dense_o2o",
+            "dense_o2o_mode",
+            "dense_o2o_start_epoch",
+            "dense_o2o_image_stop_epoch",
+            "dense_o2o_copyblend_stop_epoch",
+            "dense_o2o_mosaic_prob",
+            "dense_o2o_mixup_prob",
+            "dense_o2o_copyblend_prob",
+            "dense_o2o_copyblend_area_threshold",
+            "dense_o2o_copyblend_num_objects",
+            "dense_o2o_copyblend_expand_ratios",
             "dataset_file",
             "coco_path",
             "dataset_dir",
@@ -1086,6 +1104,29 @@ def get_args_parser():
     parser.set_defaults(dn_negative=True)
     parser.add_argument("--dn_loss_coef", default=1.0, type=float)
     parser.add_argument("--dn_neg_loss_coef", default=1.0, type=float)
+    parser.add_argument("--use_budgeted_sa", action="store_true")
+    parser.add_argument("--sa_start_epoch", default=0, type=int)
+    parser.add_argument("--sa_stop_epoch", default=0, type=int)
+    parser.add_argument("--sa_total_budgets", default=(6, 7, 9), type=int, nargs=3)
+    parser.add_argument("--sa_area_thresholds", default=(32**2, 96**2), type=float, nargs=2)
+    parser.add_argument("--use_dense_o2o", action="store_true")
+    parser.add_argument("--dense_o2o_mode", default="image", choices=("image", "enhanced"))
+    parser.add_argument("--dense_o2o_start_epoch", default=2, type=int)
+    parser.add_argument("--dense_o2o_image_stop_epoch", default=12, type=int)
+    parser.add_argument("--dense_o2o_copyblend_stop_epoch", default=21, type=int)
+    parser.add_argument("--dense_o2o_mosaic_prob", default=0.5, type=float)
+    parser.add_argument("--dense_o2o_mixup_prob", default=0.5, type=float)
+    parser.add_argument("--dense_o2o_copyblend_prob", default=0.5, type=float)
+    parser.add_argument("--dense_o2o_copyblend_area_threshold", default=100.0, type=float)
+    parser.add_argument("--dense_o2o_copyblend_num_objects", default=3, type=int)
+    parser.add_argument("--dense_o2o_copyblend_expand_ratios", default=(0.1, 0.25), type=float, nargs=2)
+    parser.add_argument(
+        "--feature_adapter",
+        default="none",
+        choices=("none", "residual_ln_1x1", "ln_1x1"),
+        help="Optional lightweight adapter applied to DINOv3 feature maps before the projector.",
+    )
+    parser.add_argument("--feature_adapter_init_scale", default=1.0, type=float)
     parser.set_defaults(segmentation_head=False, mask_downsample_ratio=4)
 
     # dataset parameters
@@ -1256,9 +1297,27 @@ def populate_args(
     dn_negative=True,
     dn_loss_coef=1.0,
     dn_neg_loss_coef=1.0,
+    use_budgeted_sa=False,
+    sa_start_epoch=0,
+    sa_stop_epoch=0,
+    sa_total_budgets=(6, 7, 9),
+    sa_area_thresholds=(32**2, 96**2),
+    use_dense_o2o=False,
+    dense_o2o_mode="image",
+    dense_o2o_start_epoch=2,
+    dense_o2o_image_stop_epoch=12,
+    dense_o2o_copyblend_stop_epoch=21,
+    dense_o2o_mosaic_prob=0.5,
+    dense_o2o_mixup_prob=0.5,
+    dense_o2o_copyblend_prob=0.5,
+    dense_o2o_copyblend_area_threshold=100.0,
+    dense_o2o_copyblend_num_objects=3,
+    dense_o2o_copyblend_expand_ratios=(0.1, 0.25),
     register_border_tokens=0,
     register_fill="randn",
     register_noise_std=1.0,
+    feature_adapter="none",
+    feature_adapter_init_scale=1.0,
     # Dataset parameters
     dataset_file="coco",
     coco_path=None,
@@ -1376,9 +1435,27 @@ def populate_args(
         dn_negative=dn_negative,
         dn_loss_coef=dn_loss_coef,
         dn_neg_loss_coef=dn_neg_loss_coef,
+        use_budgeted_sa=use_budgeted_sa,
+        sa_start_epoch=sa_start_epoch,
+        sa_stop_epoch=sa_stop_epoch,
+        sa_total_budgets=sa_total_budgets,
+        sa_area_thresholds=sa_area_thresholds,
+        use_dense_o2o=use_dense_o2o,
+        dense_o2o_mode=dense_o2o_mode,
+        dense_o2o_start_epoch=dense_o2o_start_epoch,
+        dense_o2o_image_stop_epoch=dense_o2o_image_stop_epoch,
+        dense_o2o_copyblend_stop_epoch=dense_o2o_copyblend_stop_epoch,
+        dense_o2o_mosaic_prob=dense_o2o_mosaic_prob,
+        dense_o2o_mixup_prob=dense_o2o_mixup_prob,
+        dense_o2o_copyblend_prob=dense_o2o_copyblend_prob,
+        dense_o2o_copyblend_area_threshold=dense_o2o_copyblend_area_threshold,
+        dense_o2o_copyblend_num_objects=dense_o2o_copyblend_num_objects,
+        dense_o2o_copyblend_expand_ratios=dense_o2o_copyblend_expand_ratios,
         register_border_tokens=register_border_tokens,
         register_fill=register_fill,
         register_noise_std=register_noise_std,
+        feature_adapter=feature_adapter,
+        feature_adapter_init_scale=feature_adapter_init_scale,
         dataset_file=dataset_file,
         coco_path=coco_path,
         dataset_dir=dataset_dir,

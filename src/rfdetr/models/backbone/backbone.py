@@ -58,6 +58,8 @@ class Backbone(BackboneBase):
         register_border_tokens: int = 0,
         register_fill: str = "randn",
         register_noise_std: float = 1.0,
+        feature_adapter: str = "none",
+        feature_adapter_init_scale: float = 1.0,
     ):
         super().__init__()
         self.name = name
@@ -72,6 +74,8 @@ class Backbone(BackboneBase):
             register_border_tokens=register_border_tokens,
             register_fill=register_fill,
             register_noise_std=register_noise_std,
+            feature_adapter=feature_adapter,
+            feature_adapter_init_scale=feature_adapter_init_scale,
         )
         # build encoder + projector as backbone module
         if freeze_encoder:

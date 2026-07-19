@@ -71,9 +71,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-images", type=int, default=200)
     parser.add_argument("--visualize", type=int, default=24)
     parser.add_argument("--topk", type=int, default=10)
+    parser.add_argument("--pib-topk", type=int, nargs="+", default=[1, 5, 10])
     parser.add_argument("--coverage-topk", type=int, nargs="+", default=[10, 50, 100])
     parser.add_argument("--size-coverage-topk", type=int, default=100)
+    parser.add_argument("--dominance-topk", type=int, nargs="+", default=[10, 50, 100])
     parser.add_argument("--last-topk", type=int, default=1)
+    parser.add_argument(
+        "--consistency",
+        action="store_true",
+        help="Compute horizontal-flip CLS and score-map consistency diagnostics.",
+    )
     parser.add_argument("--fp-gp-threshold", type=float, default=0.5)
     parser.add_argument("--fp-gp-sigma", type=float, default=None)
     parser.add_argument("--fixed-fp-threshold", type=float, default=None)
@@ -263,6 +270,48 @@ def box_coverage(
     return masked_mean_bool(covered, box_mask)
 
 
+def topk_point_in_box_metrics(
+    result: dict,
+    prefix: str,
+    score: torch.Tensor,
+    pib_topk: list[int],
+    foreground_mask: torch.Tensor,
+) -> None:
+    ranked = torch.argsort(score, descending=True)
+    for k in pib_topk:
+        topk = ranked[: min(k, ranked.numel())]
+        result[f"{prefix}_top{k}_pib_any"] = float(foreground_mask[topk].any().item())
+        result[f"{prefix}_top{k}_pib_ratio"] = float(foreground_mask[topk].float().mean().item())
+
+
+def largest_box_index(boxes_xywh: Iterable[tuple[float, float, float, float]]) -> int | None:
+    areas = [float(w) * float(h) for _, _, w, h in boxes_xywh]
+    if not areas:
+        return None
+    return int(max(range(len(areas)), key=lambda idx: areas[idx]))
+
+
+def largest_box_dominance_metrics(
+    result: dict,
+    prefix: str,
+    score: torch.Tensor,
+    dominance_topk: list[int],
+    inside_by_box: torch.Tensor,
+    largest_idx: int | None,
+) -> None:
+    ranked = torch.argsort(score, descending=True)
+    if largest_idx is None or inside_by_box.shape[1] == 0:
+        for k in dominance_topk:
+            result[f"{prefix}_largest_box_top{k}_ratio"] = float("nan")
+            result[f"{prefix}_top{k}_covered_box_count"] = float("nan")
+        return
+    largest_mask = inside_by_box[:, largest_idx]
+    for k in dominance_topk:
+        topk = ranked[: min(k, ranked.numel())]
+        result[f"{prefix}_largest_box_top{k}_ratio"] = float(largest_mask[topk].float().mean().item())
+        result[f"{prefix}_top{k}_covered_box_count"] = float(inside_by_box[topk].any(dim=0).float().sum().item())
+
+
 def per_box_max_score(score: torch.Tensor, inside_by_box: torch.Tensor) -> torch.Tensor:
     if inside_by_box.shape[1] == 0:
         return score.new_empty((0,))
@@ -343,7 +392,7 @@ def compute_last_vote_score(
     patch_tokens: torch.Tensor,
     topk: int,
     sigma: float | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return scalar vote score per patch and selected indices.
 
     patch_tokens: [N, C]. The LAST-ViT selection is channel-wise, so the
@@ -374,7 +423,49 @@ def compute_last_vote_score(
     _, selected = torch.topk(stability, k=k, dim=0, largest=True)
     votes = torch.zeros(patch_tokens.shape[0], device=patch_tokens.device, dtype=torch.float32)
     votes.scatter_add_(0, selected.reshape(-1), torch.ones(selected.numel(), device=patch_tokens.device))
-    return votes, selected
+    channel_indices = torch.arange(patch_tokens.shape[-1], device=patch_tokens.device).view(1, -1).expand_as(selected)
+    selected_values = patch_tokens[selected, channel_indices]
+    lazy_cls = selected_values.mean(dim=0)
+    return votes, selected, F.normalize(lazy_cls.float(), dim=-1)
+
+
+def centered_cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> float:
+    a = a.float().flatten()
+    b = b.float().flatten()
+    a = a - a.mean()
+    b = b - b.mean()
+    denom = a.norm() * b.norm()
+    if float(denom.item()) <= 1e-12:
+        return float("nan")
+    return float((a @ b / denom).item())
+
+
+def compute_flip_consistency(
+    encoder: torch.nn.Module,
+    image_tensor: torch.Tensor,
+    cls_token: torch.Tensor,
+    patch_score: torch.Tensor,
+    last_vote: torch.Tensor,
+    lazy_cls: torch.Tensor,
+    grid_h: int,
+    grid_w: int,
+    last_topk: int,
+) -> dict[str, float]:
+    flipped_tensor = torch.flip(image_tensor, dims=[-1])
+    flipped_features = encoder.forward_features(flipped_tensor)
+    flipped_cls = F.normalize(flipped_features["x_norm_clstoken"][0].float(), dim=-1)
+    flipped_patch_tokens = F.normalize(flipped_features["x_norm_patchtokens"][0].float(), dim=-1)
+    flipped_patch_score = flipped_patch_tokens @ flipped_cls
+    flipped_last_vote, _, flipped_lazy_cls = compute_last_vote_score(flipped_patch_tokens, topk=last_topk)
+
+    flipped_patch_score = torch.flip(flipped_patch_score.reshape(grid_h, grid_w), dims=[1]).reshape(-1)
+    flipped_last_vote = torch.flip(flipped_last_vote.reshape(grid_h, grid_w), dims=[1]).reshape(-1)
+    return {
+        "cls_hflip_cosine": float((cls_token @ flipped_cls).item()),
+        "lazy_cls_hflip_cosine": float((lazy_cls @ flipped_lazy_cls).item()),
+        "patch_score_hflip_consistency": centered_cosine_similarity(patch_score, flipped_patch_score),
+        "last_vote_hflip_consistency": centered_cosine_similarity(last_vote, flipped_last_vote),
+    }
 
 
 def fp_gp_proxy_masks(
@@ -649,6 +740,8 @@ def summarize(records: list[dict]) -> dict:
         "medium_box_with_patch_center_ratio",
         "large_box_with_patch_center_ratio",
         "patch_score_box_coverage_",
+        "patch_score_top",
+        "patch_score_largest_box_",
         "patch_score_small_box_coverage_",
         "patch_score_medium_box_coverage_",
         "patch_score_large_box_coverage_",
@@ -657,6 +750,8 @@ def summarize(records: list[dict]) -> dict:
         "patch_score_medium_per_box_",
         "patch_score_large_per_box_",
         "last_vote_box_coverage_",
+        "last_vote_top",
+        "last_vote_largest_box_",
         "last_vote_small_box_coverage_",
         "last_vote_medium_box_coverage_",
         "last_vote_large_box_coverage_",
@@ -672,6 +767,10 @@ def summarize(records: list[dict]) -> dict:
         "fixed_fp_proxy_ratio",
         "fixed_gp_proxy_ratio",
         "fixed_fp_gp_proxy_ratio",
+        "cls_hflip_cosine",
+        "lazy_cls_hflip_cosine",
+        "patch_score_hflip_consistency",
+        "last_vote_hflip_consistency",
     )
     for key in sorted(records[0].keys()) if records else []:
         if key in summary:
@@ -744,8 +843,20 @@ COMPACT_SUMMARY_KEYS = (
     "last_vote_small_box_coverage_top100",
     "last_vote_medium_box_coverage_top100",
     "last_vote_large_box_coverage_top100",
+    "patch_score_top1_pib_any",
+    "patch_score_top5_pib_any",
+    "patch_score_top10_pib_any",
+    "last_vote_top1_pib_any",
+    "last_vote_top5_pib_any",
+    "last_vote_top10_pib_any",
+    "patch_score_largest_box_top100_ratio",
+    "last_vote_largest_box_top100_ratio",
     "patch_score_fg_bg_ratio",
     "last_vote_fg_bg_ratio",
+    "cls_hflip_cosine",
+    "lazy_cls_hflip_cosine",
+    "patch_score_hflip_consistency",
+    "last_vote_hflip_consistency",
 )
 
 
@@ -787,7 +898,12 @@ def main() -> None:
     if len(records) < 2:
         raise RuntimeError("Need at least two annotated images to compute reference-image FP proxy.")
 
-    device = torch.device(args.device if args.device == "cpu" or torch.cuda.is_available() else "cpu")
+    if args.device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA was requested but is not available in this process. "
+            "Run outside the sandbox or pass --device cpu explicitly."
+        )
+    device = torch.device(args.device)
     encoder = build_dinov3_encoder(args).to(device)
     patch_size = int(encoder.patch_size)
     grid_h = args.resolution // patch_size
@@ -822,7 +938,7 @@ def main() -> None:
         reference_tokens = F.normalize(reference_features["x_norm_patchtokens"][0].float(), dim=-1)
 
         patch_score = patch_tokens @ cls_token
-        last_vote, _ = compute_last_vote_score(patch_tokens, topk=args.last_topk)
+        last_vote, _, lazy_cls = compute_last_vote_score(patch_tokens, topk=args.last_topk)
         fp_mask, gp_mask, fp_gp_mask, inter_max, intra_max = fp_gp_proxy_masks(
             patch_tokens,
             reference_tokens,
@@ -839,6 +955,7 @@ def main() -> None:
         bg_mask = ~fg_mask
         size_masks = box_size_masks(record.bboxes_xywh, device=device)
         box_has_patch_center = inside_by_box.any(dim=0)
+        largest_idx = largest_box_index(record.bboxes_xywh)
 
         score_argmax = int(patch_score.argmax().item())
         score_topk = torch.topk(patch_score, k=min(args.topk, patch_score.numel())).indices
@@ -869,6 +986,38 @@ def main() -> None:
             "fp_gp_proxy_ratio_fg": masked_ratio(fp_gp_mask, fg_mask),
             "fp_gp_proxy_ratio_bg": masked_ratio(fp_gp_mask, bg_mask),
         }
+        topk_point_in_box_metrics(result, "patch_score", patch_score, args.pib_topk, fg_mask)
+        topk_point_in_box_metrics(result, "last_vote", last_vote, args.pib_topk, fg_mask)
+        largest_box_dominance_metrics(
+            result,
+            "patch_score",
+            patch_score,
+            args.dominance_topk,
+            inside_by_box,
+            largest_idx,
+        )
+        largest_box_dominance_metrics(
+            result,
+            "last_vote",
+            last_vote,
+            args.dominance_topk,
+            inside_by_box,
+            largest_idx,
+        )
+        if args.consistency:
+            result.update(
+                compute_flip_consistency(
+                    encoder,
+                    image_tensor,
+                    cls_token,
+                    patch_score,
+                    last_vote,
+                    lazy_cls,
+                    grid_h,
+                    grid_w,
+                    args.last_topk,
+                )
+            )
         add_prefixed_stats(result, "fp_inter_max", inter_max)
         add_prefixed_stats(result, "gp_intra_max", intra_max)
         if args.fixed_fp_threshold is not None:
@@ -956,9 +1105,12 @@ def main() -> None:
             "grid": [grid_h, grid_w],
             "num_images": len(records),
             "topk": args.topk,
+            "pib_topk": args.pib_topk,
             "coverage_topk": args.coverage_topk,
             "size_coverage_topk": args.size_coverage_topk,
+            "dominance_topk": args.dominance_topk,
             "last_topk": args.last_topk,
+            "consistency": args.consistency,
             "fp_gp_threshold": args.fp_gp_threshold,
             "fp_gp_sigma": args.fp_gp_sigma,
             "fixed_fp_threshold": args.fixed_fp_threshold,

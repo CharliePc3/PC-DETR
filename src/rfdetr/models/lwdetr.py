@@ -420,6 +420,11 @@ class SetCriterion(nn.Module):
         use_position_supervised_loss=False,
         ia_bce_loss=False,
         mask_point_sample_ratio: int = 16,
+        use_budgeted_sa=False,
+        sa_start_epoch=0,
+        sa_stop_epoch=0,
+        sa_total_budgets=(6, 7, 9),
+        sa_area_thresholds=(32**2, 96**2),
     ):
         """Create the criterion.
         Parameters:
@@ -442,6 +447,43 @@ class SetCriterion(nn.Module):
         self.use_position_supervised_loss = use_position_supervised_loss
         self.ia_bce_loss = ia_bce_loss
         self.mask_point_sample_ratio = mask_point_sample_ratio
+        self.use_budgeted_sa = use_budgeted_sa
+        self.sa_start_epoch = int(sa_start_epoch)
+        self.sa_stop_epoch = int(sa_stop_epoch)
+        self.sa_total_budgets = tuple(int(budget) for budget in sa_total_budgets)
+        self.sa_area_thresholds = tuple(float(threshold) for threshold in sa_area_thresholds)
+        self.current_epoch = 0
+
+        if len(self.sa_total_budgets) != 3:
+            raise ValueError("sa_total_budgets must contain small, medium, and large budgets.")
+        if len(self.sa_area_thresholds) != 2 or self.sa_area_thresholds[0] >= self.sa_area_thresholds[1]:
+            raise ValueError("sa_area_thresholds must be two increasing pixel-area thresholds.")
+        if self.use_budgeted_sa:
+            if self.group_detr <= 1:
+                raise ValueError("Budgeted SA matching requires group_detr > 1.")
+            if self.sa_start_epoch < 0 or self.sa_stop_epoch <= self.sa_start_epoch:
+                raise ValueError("Budgeted SA matching requires 0 <= sa_start_epoch < sa_stop_epoch.")
+            if any(budget < self.group_detr for budget in self.sa_total_budgets):
+                raise ValueError("Each SA total budget must be at least group_detr.")
+
+    def set_epoch(self, epoch):
+        self.current_epoch = int(epoch)
+
+    def _budgeted_sa_active(self):
+        return (
+            self.training
+            and self.use_budgeted_sa
+            and self.sa_start_epoch <= self.current_epoch < self.sa_stop_epoch
+        )
+
+    def _matched_normalizer(self, indices, device):
+        num_matches = sum(len(src) for src, _ in indices)
+        if self.sum_group_losses:
+            num_matches /= self.group_detr
+        num_matches = torch.as_tensor([num_matches], dtype=torch.float, device=device)
+        if is_dist_avail_and_initialized():
+            torch.distributed.all_reduce(num_matches)
+        return torch.clamp(num_matches / get_world_size(), min=1).item()
 
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
         """Classification loss (Binary focal loss)
@@ -786,16 +828,45 @@ class SetCriterion(nn.Module):
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if "aux_outputs" in outputs:
+            sa_active = self._budgeted_sa_active()
+            sa_match_info = {
+                "sa_requested": 0,
+                "sa_matched": 0,
+                "sa_matched_small": 0,
+                "sa_matched_medium": 0,
+                "sa_matched_large": 0,
+            }
             for i, aux_outputs in enumerate(outputs["aux_outputs"]):
-                indices = self.matcher(aux_outputs, targets, group_detr=group_detr)
+                if sa_active:
+                    indices, layer_match_info = self.matcher(
+                        aux_outputs,
+                        targets,
+                        group_detr=group_detr,
+                        sa_total_budgets=self.sa_total_budgets,
+                        sa_area_thresholds=self.sa_area_thresholds,
+                        sa_layer_index=i,
+                        return_match_info=True,
+                    )
+                    aux_num_boxes = self._matched_normalizer(indices, aux_outputs["pred_logits"].device)
+                    for key, value in layer_match_info.items():
+                        sa_match_info[key] += value
+                else:
+                    indices = self.matcher(aux_outputs, targets, group_detr=group_detr)
+                    aux_num_boxes = num_boxes
                 for loss in self.losses:
                     kwargs = {}
                     if loss == "labels":
                         # Logging is enabled only for the last layer
                         kwargs = {"log": False}
-                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
+                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, aux_num_boxes, **kwargs)
                     l_dict = {k + f"_{i}": v for k, v in l_dict.items()}
                     losses.update(l_dict)
+
+            if self.use_budgeted_sa:
+                metric_device = outputs["pred_logits"].device
+                losses["sa_active"] = torch.as_tensor(float(sa_active), device=metric_device)
+                for key, value in sa_match_info.items():
+                    losses[key] = torch.as_tensor(float(value), device=metric_device)
 
         if "enc_outputs" in outputs:
             enc_outputs = outputs["enc_outputs"]
@@ -1029,6 +1100,8 @@ def build_model(args):
         register_border_tokens=args.register_border_tokens,
         register_fill=args.register_fill,
         register_noise_std=args.register_noise_std,
+        feature_adapter=args.feature_adapter,
+        feature_adapter_init_scale=args.feature_adapter_init_scale,
     )
     if args.encoder_only:
         return backbone[0].encoder, None, None
@@ -1095,6 +1168,13 @@ def build_criterion_and_postprocessors(args):
         losses.append("masks")
 
     sum_group_losses = getattr(args, "sum_group_losses", False)
+    budgeted_sa_kwargs = {
+        "use_budgeted_sa": getattr(args, "use_budgeted_sa", False),
+        "sa_start_epoch": getattr(args, "sa_start_epoch", 0),
+        "sa_stop_epoch": getattr(args, "sa_stop_epoch", 0),
+        "sa_total_budgets": getattr(args, "sa_total_budgets", (6, 7, 9)),
+        "sa_area_thresholds": getattr(args, "sa_area_thresholds", (32**2, 96**2)),
+    }
     if args.segmentation_head:
         criterion = SetCriterion(
             args.num_classes + 1,
@@ -1108,6 +1188,7 @@ def build_criterion_and_postprocessors(args):
             use_position_supervised_loss=args.use_position_supervised_loss,
             ia_bce_loss=args.ia_bce_loss,
             mask_point_sample_ratio=args.mask_point_sample_ratio,
+            **budgeted_sa_kwargs,
         )
     else:
         criterion = SetCriterion(
@@ -1121,6 +1202,7 @@ def build_criterion_and_postprocessors(args):
             use_varifocal_loss=args.use_varifocal_loss,
             use_position_supervised_loss=args.use_position_supervised_loss,
             ia_bce_loss=args.ia_bce_loss,
+            **budgeted_sa_kwargs,
         )
     criterion.to(device)
     postprocess = PostProcess(num_select=args.num_select)
