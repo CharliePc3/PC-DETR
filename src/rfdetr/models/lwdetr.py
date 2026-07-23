@@ -459,8 +459,6 @@ class SetCriterion(nn.Module):
         if len(self.sa_area_thresholds) != 2 or self.sa_area_thresholds[0] >= self.sa_area_thresholds[1]:
             raise ValueError("sa_area_thresholds must be two increasing pixel-area thresholds.")
         if self.use_budgeted_sa:
-            if self.group_detr <= 1:
-                raise ValueError("Budgeted SA matching requires group_detr > 1.")
             if self.sa_start_epoch < 0 or self.sa_stop_epoch <= self.sa_start_epoch:
                 raise ValueError("Budgeted SA matching requires 0 <= sa_start_epoch < sa_stop_epoch.")
             if any(budget < self.group_detr for budget in self.sa_total_budgets):

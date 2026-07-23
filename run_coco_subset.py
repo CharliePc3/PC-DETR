@@ -295,8 +295,6 @@ def main():
     if args.out_feature_indexes[0] < 0 or args.out_feature_indexes[-1] >= 12:
         raise ValueError("DINOv3-S has 12 blocks, so out_feature_indexes must be in [0, 11].")
     if args.use_budgeted_sa:
-        if args.group_detr <= 1:
-            raise ValueError("Budgeted SA requires group_detr > 1.")
         if args.sa_start_epoch < 0 or not args.sa_start_epoch < args.sa_stop_epoch <= effective_epochs:
             raise ValueError("Budgeted SA requires 0 <= sa_start_epoch < sa_stop_epoch <= epochs.")
         if any(budget < args.group_detr for budget in args.sa_total_budgets):
