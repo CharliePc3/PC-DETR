@@ -398,3 +398,144 @@ Launch status on 2026-07-15:
 - E0 entered distributed training with world size 2, total batch size 16, 33.21M trainable parameters, and the intended `[2,5,8,11]`/P4 configuration.
 - At iteration 80, loss remained finite, warmup LR had reached about `3.7e-5`, peak model memory was about 8.45GB per process, and no training error was present.
 - E1, E2, and E3 will start automatically after each preceding experiment exits successfully. The queue uses `set -e`, so a failed experiment stops the sequence rather than silently contaminating later results.
+
+## Final Results: B0 Optimization and Feature Ablations
+
+All four experiments completed successfully on 2026-07-19. Metrics below are the best EMA COCO `maxDets=100` results.
+
+| ID | Levels | Block indexes | Epoch | AP | AP50 | AP75 | APs | APm | APl | Params |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| E0 | P4 | `[2,5,8,11]` | 23 | 48.72 | 68.10 | 52.24 | 24.62 | 54.21 | 70.42 | 33.21M |
+| E1 | P3/P4/P5 | `[2,5,8,11]` | 22 | **51.60** | **70.38** | **55.68** | **29.43** | **56.13** | **72.05** | 42.60M |
+| E2 | P4 | `[1,4,7,11]` | 23 | 48.95 | 68.43 | 52.30 | **25.50** | 54.55 | 70.31 | 33.21M |
+| E3 | P4 | `[3,6,9,11]` | 23 | 48.96 | 68.39 | **52.44** | 24.64 | **54.57** | **70.68** | 33.21M |
+
+Controlled deltas relative to E0:
+
+- E1: AP +2.88, AP50 +2.28, AP75 +3.44, APs +4.81, APm +1.91, APl +1.63.
+- E2: AP +0.23, APs +0.88, APl -0.11.
+- E3: AP +0.23, APs +0.03, APl +0.27.
+- E2 and E3 differ by only 0.003 AP. One seed cannot establish either index set as superior.
+
+Recall confirms that E1's gain is not only score calibration:
+
+- AR100 increases from 66.13 to 70.19 (+4.06 points).
+- Small-object AR increases from 41.07 to 49.23 (+8.16 points).
+- AP75 grows more than AP50, indicating improved localization as well as recall.
+
+Optimization interpretation:
+
+- The complete E0 optimization recipe did not improve P4. The old 24-epoch B0 reached 48.99 EMA AP, while E0 reached 48.72 (-0.26 points).
+- Before the epoch-20 step drop, E0 also trailed the old B0 throughout most of training. The detector-`5e-4`/low-backbone-LR recipe is therefore not validated for RF's P4 architecture.
+- The step drop itself was useful: E0 rose from 47.84 AP at epoch 19 to 48.40 at epoch 20 and 48.72 at epoch 23. However, E0 simultaneously changed detector LR, encoder LR, warmup, and LR drop, so this run cannot isolate which LR component caused the weaker early trajectory.
+- A better next optimization control is the original RF learning rates with the same epoch-20 step drop, especially on the stronger P3/P4/P5 architecture.
+
+Feature-level interpretation:
+
+- P3/P4/P5 is the only decisive improvement in this matrix. It closes about half of the old B0-to-official-RF gap and raises a randomly initialized detector above the P4 A1 run that loaded RF detector weights (51.60 versus 51.10 AP).
+- The best E1 remains 2.92 AP below official RF-DETR Medium at `maxDets=100` (54.52) and 2.81 below the inspected DEIMv2-DINOv3 run (54.41).
+- This is not a parameter-matched Medium comparison: E1 adds 9.38M parameters (+28.2%) and raises measured peak training memory from about 9.3GB to 15.5GB per process.
+- P3/P4/P5 supplies 6,804 decoder source positions at resolution 576, versus 1,296 for P4 alone, a 5.25x increase. This explains both the recall gain and the extra memory/compute.
+
+Projector parameter decomposition:
+
+- P4 projector: 1.445M parameters.
+- P3 branch: 2.429M parameters.
+- P5 branch: 6.756M parameters, dominated by four dense 3x3 stride-2 convolutions.
+- A P3/P4 projector is expected to yield about 35.64M total model parameters, only about 7.3% above E0, while removing most of E1's parameter overhead.
+
+Recommended next controls:
+
+1. Run P3/P4 with `[2,5,8,11]` under the E1 recipe to test how much of the 2.88-point gain survives without the expensive P5 branch.
+2. Run P3/P4 with original RF learning rates (`lr=1e-4`, `lr_encoder=1.5e-4`) and an epoch-20 step drop to separate the useful late decay from the unsuccessful DEIM-like LR ratio.
+3. Keep `[2,5,8,11]` as the default index set. Treat E2's small-object tendency and E3's large-object tendency only as hypotheses unless repeated with multiple seeds.
+4. Benchmark params, GFLOPs, and latency before presenting E1 as a comparison to RF-DETR Medium; its AP is currently an accuracy-oriented, higher-cost result.
+
+## P3/P4 LR Controls and Complexity Benchmark
+
+Two P3/P4 experiments were prepared as a controlled learning-rate comparison on 2026-07-20.
+
+Shared configuration:
+
+- P3/P4 projector, DINOv3 blocks `[2,5,8,11]`, resolution 576.
+- DINOv3 image-pretrained weights only; random projector, decoder, and heads.
+- No adapter, no CDN, no budgeted SA, and no dense O2O.
+- RF default horizontal flip plus multi-scale/expanded resizing.
+- EMA, 24 epochs, epoch-20 step LR drop, seed 42, total batch size 16.
+- Measured trainable parameters: 35.74M.
+
+LR controls:
+
+| ID | Detector/head LR | Nominal encoder LR | Warmup | Purpose |
+|---|---:|---:|---:|---|
+| P3P4-LR-A | `5e-4` | `2.5e-5` | 0.15 epoch | Match E1 optimization recipe |
+| P3P4-LR-B | `1e-4` | `1.5e-4` | none | Restore RF learning rates while retaining the epoch-20 drop |
+
+Runtime records:
+
+- Queue script: `run_p3p4_lr_ablation_queue.sh`.
+- The original P3P4-LR-A launch used two GPUs with `batch_size=8` and
+  `grad_accum_steps=1`. It was stopped during epoch 6, then resumed from the
+  epoch-5 checkpoint on one GPU with `batch_size=8` and
+  `grad_accum_steps=2`. The global batch size remained 16.
+- The single-GPU launcher now supports `RUN_A=0` or `RUN_B=0`, so either
+  control can be run independently without occupying a second GPU.
+- Peak training memory for the resumed single-GPU P3P4-LR-A run was about
+  14.6GB.
+- Each completed run is benchmarked from `checkpoint_best_total.pth`.
+
+P3P4-LR-A completed on 2026-07-27:
+
+| Source | Epoch | AP | AP50 | AP75 | APs | APm | APl | AR100 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Regular | 23 | 51.01 | - | - | - | - | - | - |
+| EMA | 23 | **51.08** | 69.78 | 55.12 | 28.89 | 56.05 | 71.15 | 69.50 |
+
+- The final EMA result is 0.52 AP below the P3/P4/P5 E1 result (51.60), while
+  using 35.74M rather than 42.60M trainable parameters.
+- Removing P5 therefore retains 82% of the full three-level improvement over
+  the P4 E0 baseline: P3/P4 gains 2.36 AP over E0, versus 2.88 AP for
+  P3/P4/P5.
+- The small-object gain remains substantial: APs improves from 24.62 to 28.89
+  (+4.27), compared with 29.43 for P3/P4/P5.
+- P3/P4-LR-B is the remaining control needed to determine whether RF's
+  original detector/backbone learning-rate ratio is better suited to this
+  projector than the DEIM-like ratio used by P3P4-LR-A.
+
+Unified benchmark protocol:
+
+- Script: `tools/benchmark_detector.py`.
+- Fixed input: 576x576, batch size 1, RTX 5090, PyTorch eager mode.
+- 50 warmup iterations and 200 measured iterations using CUDA events.
+- Reports FP32/TF32 and AMP FP16 separately; postprocessing is excluded.
+- FLOPs use the RF-DETR JIT counter plus QK-transpose and attention-V costs for `scaled_dot_product_attention`.
+- One multiply-add is counted as one FLOP. `grid_sampler` remains ignored, matching the RF-DETR utility convention.
+- These timings are PyTorch eager results and must not be compared directly with TensorRT latency from a paper.
+
+Existing P3/P4/P5 E1 benchmark at 576:
+
+| Params | GFLOPs | Repo count without SDPA | FP32/TF32 mean | FP32 p50 | FP32 peak memory | AMP mean |
+|---:|---:|---:|---:|---:|---:|---:|
+| 42.60M | 62.89 | 47.11 | 19.95 ms | 19.27 ms | 249.37 MiB | 27.20 ms |
+
+AMP is slower in this eager-mode benchmark, most likely because autocast and mixed-kernel dispatch overhead dominate at batch size 1. It should not be treated as TensorRT/FP16 deployment performance.
+
+### Final Results (2026-07-19)
+
+All four jobs completed successfully. Values below use each run's best EMA
+checkpoint and are COCO AP points.
+
+| ID | Levels | Indexes | AP | AP50 | AP75 | APs | APm | APl | Epoch |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| E0 | P4 | `[2,5,8,11]` | 48.72 | 68.10 | 52.24 | 24.62 | 54.21 | 70.42 | 24 |
+| E1 | P3/P4/P5 | `[2,5,8,11]` | **51.60** | **70.38** | **55.68** | **29.43** | **56.13** | **72.05** | 23 |
+| E2 | P4 | `[1,4,7,11]` | 48.95 | **68.43** | 52.30 | **25.50** | 54.55 | 70.31 | 24 |
+| E3 | P4 | `[3,6,9,11]` | **48.96** | 68.39 | **52.44** | 24.64 | **54.57** | **70.68** | 24 |
+
+Interpretation:
+
+- E1 improves over E0 by 2.88 AP, 3.44 AP75, 4.81 APs, 1.91 APm, and 1.69 APl. The gap is already about 2.8 AP after epoch 1 and remains about 2.6 AP before the epoch-20 LR drop, so it is a feature-level effect rather than a best-epoch artifact.
+- E2 and E3 are separated by only 0.003 AP. Both are about 0.23 AP above E0, within the scale where a repeat seed is needed. No intermediate-index set is established as superior.
+- The optimized P4 LR recipe is 0.26 AP below the previous aligned random-detector P4 run (48.99 AP). Directly copying DEIMv2's detector/backbone LR ratio is therefore rejected for the current RF projector.
+- The epoch-20 step drop is useful: all runs gain roughly 0.6-0.8 AP immediately. It should be separated from the rejected extreme LR ratio in future experiments.
+- P3/P4/P5 increases trainable parameters from 33.21M to 42.60M, an extra 9.38M or 28.25%. Its checkpoint grows from about 532MB to 682MB. FLOPs and latency were not measured, so E1 is an accuracy-oriented result, not yet a compute-matched RF-DETR Medium result.
