@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LazyStrike-style offline refinement for DINOv3 backbones.
+"""Unified offline refinement for DINOv3 backbones.
 
 This script refines only the ViT encoder weights. It does not add a module to
 RF-DETR inference. The refined checkpoint can be loaded later with
@@ -18,6 +18,11 @@ Optional detection-aware dense refinement extends the objective to intermediate
 patch features used by RF-DETR. It uses soft patch/box overlap, box-balanced
 cross-view consistency, and multi-level frozen-teacher preservation. These
 options default to disabled so existing LazyStrike recipes remain unchanged.
+
+UniRefiner can be enabled through the same training loop. Its original
+register construction, spurious-token filtering, NCE, and SCD implementation
+is reused through a small adapter, while checkpoints remain ordinary DINOv3
+state dictionaries accepted by RF-DETR.
 """
 
 from __future__ import annotations
@@ -53,6 +58,7 @@ os.environ.setdefault("DINOV3_REPO_DIR", "/data/cpc/root/project/DINOv3")
 os.environ.setdefault("DINOV3_WEIGHTS_DIR", str(PROJECT_ROOT / "weights" / "dinov3"))
 
 import analyze_dinov3_tokens as diag  # noqa: E402
+from refinement import UniRefinerObjective  # noqa: E402
 from rfdetr.models.backbone.dinov3 import SIZE_TO_MODEL  # noqa: E402
 
 
@@ -69,14 +75,18 @@ class CocoImageRecord:
     bboxes_xywh: list[tuple[float, float, float, float]]
 
 
+OBJECTIVE_NAMES = ("unirefiner", "lazystrike", "dense")
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser("LazyStrike-style DINOv3 refinement")
+    parser = argparse.ArgumentParser("Composable DINOv3 backbone refinement")
     parser.add_argument("--data-root", default="/data/cpc/root/dataset/COCO")
     parser.add_argument("--split", default="train2017")
     parser.add_argument("--ann-file", default=None)
     parser.add_argument("--output-dir", default="output/lazystrike_refine/dinov3_small_coco5k_v1")
     parser.add_argument("--encoder", default="dinov3_small", choices=tuple(f"dinov3_{k}" for k in SIZE_TO_MODEL))
     parser.add_argument("--pretrained-encoder", default=None)
+    parser.add_argument("--objectives", nargs="+", choices=OBJECTIVE_NAMES, default=None)
     parser.add_argument("--resolution", type=int, default=640)
     parser.add_argument("--num-images", type=int, default=5000)
     parser.add_argument("--epochs", type=int, default=2)
@@ -104,8 +114,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lambda-dense-object", type=float, default=0.0)
     parser.add_argument("--lambda-dense-global", type=float, default=0.0)
     parser.add_argument("--dense-min-overlap", type=float, default=0.0)
+    parser.add_argument("--lambda-unirefiner", type=float, default=0.0)
+    parser.add_argument("--unirefiner-root", default="/data/cpc/root/project/UniRefiner")
+    parser.add_argument(
+        "--unirefiner-background",
+        default="/data/cpc/root/project/UniRefiner/assets/backgrounds/fixed_reference.png",
+    )
+    parser.add_argument("--uni-reg-factor", type=int, default=37)
+    parser.add_argument("--uni-register-fill", choices=("zero", "rand", "randn"), default="zero")
+    parser.add_argument("--uni-num-proposals", type=int, default=3)
+    parser.add_argument("--uni-fp-gp-sigma", type=float, default=0.5)
+    parser.add_argument("--uni-fp-gp-cosine-threshold", type=float, default=None)
+    parser.add_argument("--uni-adaptive-register-threshold", type=float, default=0.55)
+    parser.add_argument("--uni-disable-attention-hijack-filter", action="store_true")
+    parser.add_argument("--uni-attention-hijack-layer-start", type=int, default=8)
+    parser.add_argument("--uni-attention-hijack-layer-end", type=int, default=11)
+    parser.add_argument("--uni-attention-hijack-sigma", type=float, default=0.5)
+    parser.add_argument("--uni-disable-student-teacher-matching", action="store_true")
+    parser.add_argument("--uni-uniformity-strength", type=float, default=0.3)
+    parser.add_argument("--uni-scd-start-stage", type=float, default=0.1)
+    parser.add_argument("--uni-scd-weight", type=float, default=0.4)
     parser.add_argument("--layer-lr-decay", type=float, default=1.0)
     parser.add_argument("--amp", action="store_true")
+    parser.add_argument("--amp-dtype", choices=("fp16", "bf16"), default="fp16")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--shuffle", action="store_true")
@@ -115,8 +146,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_objectives(args: argparse.Namespace) -> tuple[str, ...]:
+    if args.objectives is not None:
+        if len(args.objectives) != len(set(args.objectives)):
+            raise ValueError("--objectives values must be unique.")
+        return tuple(args.objectives)
+
+    inferred = []
+    if args.lambda_unirefiner > 0:
+        inferred.append("unirefiner")
+    if args.lambda_align > 0 or args.lambda_cover > 0 or args.lambda_consistency > 0:
+        inferred.append("lazystrike")
+    if args.lambda_dense_object > 0 or args.lambda_dense_global > 0:
+        inferred.append("dense")
+    if not inferred:
+        raise ValueError("No active objective. Set --objectives or a positive objective weight.")
+    return tuple(inferred)
+
+
 def validate_args(args: argparse.Namespace, model: torch.nn.Module) -> None:
     num_blocks = len(model.blocks)
+    if "unirefiner" in args.objectives:
+        if args.lambda_unirefiner <= 0:
+            raise ValueError("--lambda-unirefiner must be positive when UniRefiner is enabled.")
+        if args.uni_reg_factor <= 0 or args.uni_num_proposals <= 0:
+            raise ValueError("UniRefiner reg factor and proposal count must be positive.")
+        if not Path(args.unirefiner_root).is_dir():
+            raise FileNotFoundError(f"UniRefiner source root not found: {args.unirefiner_root}")
+        if not Path(args.unirefiner_background).is_file():
+            raise FileNotFoundError(
+                f"UniRefiner background image not found: {args.unirefiner_background}"
+            )
     if args.train_block_indexes is not None:
         if args.train_block_indexes != sorted(set(args.train_block_indexes)):
             raise ValueError("--train-block-indexes must be unique and in ascending order.")
@@ -138,7 +198,7 @@ def validate_args(args: argparse.Namespace, model: torch.nn.Module) -> None:
     if args.lambda_dense_object < 0 or args.lambda_dense_global < 0:
         raise ValueError("Dense loss weights must be non-negative.")
 
-    dense_enabled = args.lambda_dense_object > 0 or args.lambda_dense_global > 0
+    dense_enabled = "dense" in args.objectives
     if dense_enabled and not args.dense_layers:
         raise ValueError("--dense-layers is required when a dense loss is enabled.")
     if not args.dense_layers:
@@ -503,6 +563,7 @@ def compute_losses(
     centers: torch.Tensor,
     args: argparse.Namespace,
     distill_override: torch.Tensor | None = None,
+    enable_lazystrike: bool = True,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     cls_tokens = F.normalize(student_features["x_norm_clstoken"].float(), dim=-1)
     patch_tokens = F.normalize(student_features["x_norm_patchtokens"].float(), dim=-1)
@@ -546,8 +607,8 @@ def compute_losses(
     )
 
     total = (
-        args.lambda_align * align_loss
-        + args.lambda_cover * cover_loss
+        (args.lambda_align if enable_lazystrike else 0.0) * align_loss
+        + (args.lambda_cover if enable_lazystrike else 0.0) * cover_loss
         + args.lambda_distill * distill_loss
     )
     stats = {
@@ -656,6 +717,7 @@ def save_checkpoint(model: torch.nn.Module, output_dir: Path, name: str, args: a
 
 def main() -> None:
     args = parse_args()
+    args.objectives = resolve_objectives(args)
     set_seed(args.seed)
 
     data_root = Path(args.data_root)
@@ -697,12 +759,18 @@ def main() -> None:
         args.freeze_final_norm,
     )
     student.train()
+    lazystrike_enabled = "lazystrike" in args.objectives
+    dense_enabled = "dense" in args.objectives
+    detection_objective_enabled = lazystrike_enabled or dense_enabled
+    unirefiner_objective = None
+    if "unirefiner" in args.objectives:
+        unirefiner_objective = UniRefinerObjective(args, student, teacher, device)
     centers, grid_h, grid_w = patch_centers_for_model(student, args.resolution, device)
     patch_boxes = patch_boxes_xyxy(grid_h, grid_w, int(student.patch_size), device)
-    dense_enabled = bool(args.dense_layers)
     print(f"Dataset images: {len(dataset)}")
     print(f"Annotation file: {ann_file}")
     print(f"Patch grid: {grid_h}x{grid_w}")
+    print(f"Objectives: {', '.join(args.objectives)}")
     print(f"Trainable modules: {', '.join(trainable_names)}")
     if dense_enabled:
         print(
@@ -714,7 +782,9 @@ def main() -> None:
     optimizer_groups = build_optimizer_param_groups(student, args)
     optimizer = torch.optim.AdamW(optimizer_groups, lr=args.lr, weight_decay=args.weight_decay)
     print(f"Optimizer LRs: {sorted({group['lr'] for group in optimizer.param_groups})}")
-    scaler = torch.cuda.amp.GradScaler(enabled=args.amp and device.type == "cuda")
+    use_scaler = args.amp and args.amp_dtype == "fp16" and device.type == "cuda"
+    scaler = torch.cuda.amp.GradScaler(enabled=use_scaler)
+    autocast_dtype = torch.bfloat16 if args.amp_dtype == "bf16" else torch.float16
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     history_path = output_dir / "history.csv"
@@ -729,6 +799,13 @@ def main() -> None:
         "loss_distill",
         "loss_dense_object",
         "loss_dense_global",
+        "loss_detection",
+        "loss_unirefiner",
+        "uni_nce",
+        "uni_scd",
+        "uni_align_reg",
+        "uni_uniform_reg",
+        "uni_useful_ratio",
         "valid_images",
         "max_memory_mib",
         "seconds",
@@ -750,13 +827,31 @@ def main() -> None:
 
     global_step = 0
     start_time = time.time()
+    total_steps = max(args.epochs * len(loader), 1)
     for epoch in range(args.epochs):
         for batch in loader:
             global_step += 1
             images = batch["images"].to(device=device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
 
-            with torch.cuda.amp.autocast(enabled=args.amp and device.type == "cuda"):
+            with torch.autocast(
+                device_type=device.type,
+                dtype=autocast_dtype,
+                enabled=args.amp and device.type == "cuda",
+            ):
+                zero = images.new_tensor(0.0)
+                loss = zero
+                consistency_loss = zero
+                object_dense_loss = zero
+                global_dense_loss = zero
+                detection_loss = zero
+                stats = {
+                    "loss_align": 0.0,
+                    "loss_cover": 0.0,
+                    "loss_distill": 0.0,
+                    "valid_images": 0.0,
+                }
+
                 if dense_enabled:
                     student_levels = extract_multilevel_features(student, images, args.dense_layers)
                     with torch.no_grad():
@@ -779,39 +874,66 @@ def main() -> None:
                         )
                     )
                     final_layer = args.dense_layers[-1]
-                    loss, stats = compute_losses(
+                    detection_base_loss, stats = compute_losses(
                         student_levels[final_layer],
                         teacher_levels[final_layer],
                         batch["boxes"],
                         centers,
                         args,
                         distill_override=distill_loss,
+                        enable_lazystrike=lazystrike_enabled,
                     )
-                    consistency_loss = compute_cls_consistency_from_levels(
-                        student_levels,
-                        flipped_student_levels,
-                        final_layer,
-                    )
-                    loss = (
-                        loss
-                        + args.lambda_consistency * consistency_loss
+                    if lazystrike_enabled:
+                        consistency_loss = compute_cls_consistency_from_levels(
+                            student_levels,
+                            flipped_student_levels,
+                            final_layer,
+                        )
+                    detection_loss = (
+                        detection_base_loss
+                        + (args.lambda_consistency if lazystrike_enabled else 0.0) * consistency_loss
                         + args.lambda_dense_object * object_dense_loss
                         + args.lambda_dense_global * global_dense_loss
                     )
                     stats.update(dense_stats)
-                else:
+                elif lazystrike_enabled:
                     student_features = student.forward_features(images)
                     with torch.no_grad():
                         teacher_features = teacher.forward_features(images)
-                    loss, stats = compute_losses(student_features, teacher_features, batch["boxes"], centers, args)
+                    detection_loss, stats = compute_losses(
+                        student_features,
+                        teacher_features,
+                        batch["boxes"],
+                        centers,
+                        args,
+                        enable_lazystrike=True,
+                    )
                     consistency_loss = compute_flip_consistency_loss(
                         student,
                         images,
                         student_features["x_norm_clstoken"],
                     )
-                    object_dense_loss = loss.new_tensor(0.0)
-                    global_dense_loss = loss.new_tensor(0.0)
-                    loss = loss + args.lambda_consistency * consistency_loss
+                    detection_loss = detection_loss + args.lambda_consistency * consistency_loss
+
+                if detection_objective_enabled:
+                    loss = loss + detection_loss
+
+                unirefiner_stats = {
+                    "loss_unirefiner": 0.0,
+                    "uni_nce": 0.0,
+                    "uni_scd": 0.0,
+                    "uni_align_reg": 0.0,
+                    "uni_uniform_reg": 0.0,
+                    "uni_useful_ratio": 0.0,
+                }
+                if unirefiner_objective is not None:
+                    train_stage = (global_step - 1) / max(total_steps - 1, 1)
+                    unirefiner_loss, unirefiner_stats = unirefiner_objective(
+                        images,
+                        train_stage=train_stage,
+                        global_step=global_step,
+                    )
+                    loss = loss + unirefiner_loss
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -830,6 +952,8 @@ def main() -> None:
                 "loss_distill": stats["loss_distill"],
                 "loss_dense_object": float(object_dense_loss.detach().item()),
                 "loss_dense_global": float(global_dense_loss.detach().item()),
+                "loss_detection": float(detection_loss.detach().item()),
+                **unirefiner_stats,
                 "valid_images": stats["valid_images"],
                 "max_memory_mib": (
                     torch.cuda.max_memory_allocated(device) / (1024**2)
@@ -850,6 +974,7 @@ def main() -> None:
                     "epoch={epoch} step={step} loss={loss:.5f} align={loss_align:.5f} "
                     "cover={loss_cover:.5f} cons={loss_consistency:.5f} distill={loss_distill:.5f} "
                     "dense_obj={loss_dense_object:.5f} dense_global={loss_dense_global:.5f} "
+                    "uni={loss_unirefiner:.5f} useful={uni_useful_ratio:.3f} "
                     "valid={valid_images:.0f} max_mem={max_memory_mib:.0f}MiB".format(**row),
                     flush=True,
                 )

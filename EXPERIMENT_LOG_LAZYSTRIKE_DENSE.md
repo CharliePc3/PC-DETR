@@ -103,3 +103,83 @@ high-value experiment is sequential refinement: initialize from v2, preserve or
 freeze block 11, and apply dense consistency mainly to block 8 (optionally block
 10) with a reduced global term. This tests complementarity without forcing CLS
 aggregation and dense invariance to reshape the final block at the same time.
+
+## Dense-to-Lazy Reverse Sequential Test (2026-07-24)
+
+The previous simultaneous hybrid reached 33.72 AP because LazyStrike and dense
+consistency both reshaped the final block. The previous sequential tests used
+the opposite order, LazyStrike to dense consistency, and reduced the standalone
+LazyStrike v2 result from 34.36 to at most 34.01 AP. Even with block 11 frozen,
+changing blocks 8--10 changed the input distribution consumed by block 11.
+
+The new test reverses the order. It initializes from the validated
+`dense_only` epoch-1 checkpoint, then runs the exact FP32 LazyStrike
+v2-conservative recipe for two epochs while training only blocks 10--11 and the
+final norm. The frozen teacher is initialized from the same dense checkpoint.
+Consequently, the layer-8 dense feature is preserved exactly, while the final
+blocks can adapt to that feature distribution under LazyStrike supervision and
+dense-teacher distillation.
+
+`run_dense_to_lazy_gpu0.sh` runs on physical GPU0 and performs:
+
+1. two-epoch Dense-to-Lazy refinement on the same seeded COCO train-5k subset;
+2. matched COCO-val-200 diagnostics for epoch-1 and epoch-2 checkpoints;
+3. aligned 24-epoch medium detection for epoch 2;
+4. summary export to `output/dense_to_lazy/summary.tsv`.
+
+Success is measured against standalone LazyStrike v2 rather than the original
+baseline: AP should exceed 34.36 with last-five AP at least 33.71, while
+retaining the dense route's AP75/small-object behavior. If epoch 2 misses this
+target, epoch 1 remains available for a targeted detection follow-up without
+repeating refinement.
+
+## Dense-to-Lazy Results (2026-07-26)
+
+The queue completed successfully. The epoch-2 checkpoint reached 33.94 AP at
+epoch 24 with 50.85 AP50, 35.94 AP75, 15.61 APs, 36.48 APm, 53.65 APl, and a
+33.46 last-five mean AP.
+
+| Variant | AP | AP50 | AP75 | APs | APm | APl | Last-5 AP |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Current base | 33.61 | 51.12 | 35.24 | 16.87 | 36.02 | 51.99 | 33.16 |
+| Dense-only | 34.03 | 50.94 | **36.75** | **17.36** | **36.85** | 51.95 | 33.56 |
+| LazyStrike v2 e2 | **34.36** | **51.71** | 36.37 | 16.77 | 36.48 | 52.97 | **33.71** |
+| Dense to Lazy e2 | 33.94 | 50.85 | 35.94 | 15.61 | 36.48 | **53.65** | 33.46 |
+
+Reverse sequential refinement therefore did not combine the two gains. It was
+0.42 AP below standalone LazyStrike and 0.08 AP below dense-only. Relative to
+dense-only, it lost 0.81 AP75 and 1.75 APs while gaining 1.70 APl. Relative to
+standalone LazyStrike, it lost 0.42 AP, 0.86 AP50, 0.43 AP75, and 1.16 APs,
+while gaining 0.68 APl. The result is a strong redistribution toward large
+objects rather than an additive improvement.
+
+Optimization was healthy and slightly easier from the dense initialization:
+average LazyStrike loss was 0.13016/0.07799 in refinement epochs 1/2 versus
+0.13411/0.08065 in the original standalone v2 run. Teacher distillation was
+nearly identical. Lower objective loss therefore did not predict better
+detection.
+
+Epoch-1 and epoch-2 token diagnostics reveal the transition:
+
+| Checkpoint | Top-100 coverage | Small coverage | LAST coverage | LAST-small coverage | CLS flip cosine |
+|---|---:|---:|---:|---:|---:|
+| Dense-only | 0.5871 | 0.1966 | 0.7506 | 0.1614 | 0.9681 |
+| Dense to Lazy epoch 1 | 0.8066 | 0.4950 | 0.7452 | 0.1569 | 0.9921 |
+| Dense to Lazy epoch 2 | 0.8519 | 0.5497 | 0.7289 | 0.1357 | 0.9943 |
+| LazyStrike v2 epoch 2 | 0.8366 | 0.5225 | 0.7365 | 0.1233 | 0.9929 |
+
+The second LazyStrike epoch continued to improve CLS-score box coverage while
+reducing LAST stability, especially for small boxes. This again shows that CLS
+coverage is not a sufficient selection metric. Freezing layer 8 did not retain
+the dense-only detector behavior because dense-only also improved layer-11
+patch consistency, and changing blocks 10--11 altered cross-level compatibility
+and the final representation consumed by the detector.
+
+**Decision:** reject Dense-to-Lazy epoch 2 as a combined checkpoint. Run the
+already available epoch-1 checkpoint through aligned detection once, because it
+preserves dense-like LAST-small coverage and can determine whether the failure
+is primarily second-epoch over-refinement. If epoch 1 also fails, stop pure
+sequential combinations. The next method should use size-aware layer-11
+teacher preservation: keep the dense teacher's small/medium-box patch features
+strongly anchored while applying LazyStrike mainly to global and large-object
+aggregation.
