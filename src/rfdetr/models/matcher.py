@@ -86,9 +86,9 @@ class HungarianMatcher(nn.Module):
         area_thresholds,
         layer_index,
     ):
-        """Assign extra GT slots to training-only groups in a deterministic, balanced way."""
+        """Assign extra GT slots deterministically while preserving base O2O matches."""
         slots = [[] for _ in range(group_detr)]
-        if group_detr <= 1 or len(target["boxes"]) == 0:
+        if group_detr < 1 or len(target["boxes"]) == 0:
             return slots, [0, 0, 0]
 
         small_threshold, large_threshold = area_thresholds
@@ -100,7 +100,11 @@ class HungarianMatcher(nn.Module):
             image_id = int(image_id)
 
         requested_by_scale = [0, 0, 0]
-        num_aux_groups = group_detr - 1
+        # With grouped DETR, group 0 is used for inference and remains strict O2O.
+        # With a single group, auxiliary decoder layers reuse unmatched queries for
+        # SA positives while the final decoder output remains strict O2O.
+        first_sa_group = 0 if group_detr == 1 else 1
+        num_sa_groups = group_detr - first_sa_group
         for target_index, area in enumerate(areas.tolist()):
             if area < small_threshold:
                 scale_index = 0
@@ -114,11 +118,10 @@ class HungarianMatcher(nn.Module):
             if extra_count == 0:
                 continue
 
-            # Group 0 is the inference group and always remains strict O2O. The hash
-            # balances extra slots over groups 1..G-1 without introducing RNG state.
-            start = (image_id * 1000003 + target_index * 9176 + layer_index * 131) % num_aux_groups
+            # The hash balances extra slots without introducing RNG state.
+            start = (image_id * 1000003 + target_index * 9176 + layer_index * 131) % num_sa_groups
             for extra_index in range(extra_count):
-                group_index = 1 + (start + extra_index) % num_aux_groups
+                group_index = first_sa_group + (start + extra_index) % num_sa_groups
                 slots[group_index].append((target_index, scale_index))
 
         return slots, requested_by_scale
@@ -289,7 +292,8 @@ class HungarianMatcher(nn.Module):
                 target_start = target_offsets[batch_index]
                 target_end = target_offsets[batch_index + 1]
 
-                for group_index in range(1, group_detr):
+                first_sa_group = 0 if group_detr == 1 else 1
+                for group_index in range(first_sa_group, group_detr):
                     extra_slots = slots_by_group[group_index]
                     if not extra_slots:
                         continue

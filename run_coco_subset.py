@@ -320,8 +320,6 @@ def main():
         if args.sdsr_use_directional_guide and not args.sdsr_use_local_reassembly:
             log_main("SDSR directional guide is inactive because local reassembly is disabled.")
     if args.use_budgeted_sa:
-        if args.group_detr <= 1:
-            raise ValueError("Budgeted SA requires group_detr > 1.")
         if args.sa_start_epoch < 0 or not args.sa_start_epoch < args.sa_stop_epoch <= effective_epochs:
             raise ValueError("Budgeted SA requires 0 <= sa_start_epoch < sa_stop_epoch <= epochs.")
         if any(budget < args.group_detr for budget in args.sa_total_budgets):
