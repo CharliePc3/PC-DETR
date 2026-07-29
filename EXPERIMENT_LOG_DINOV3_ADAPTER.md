@@ -498,9 +498,25 @@ P3P4-LR-A completed on 2026-07-27:
   P3/P4/P5.
 - The small-object gain remains substantial: APs improves from 24.62 to 28.89
   (+4.27), compared with 29.43 for P3/P4/P5.
-- P3/P4-LR-B is the remaining control needed to determine whether RF's
-  original detector/backbone learning-rate ratio is better suited to this
-  projector than the DEIM-like ratio used by P3P4-LR-A.
+
+P3P4-LR-B completed on 2026-07-29:
+
+| Source | Epoch | AP | AP50 | AP75 | APs | APm | APl | AR100 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Regular | 23 | **51.12** | 69.89 | 55.10 | 28.34 | 56.02 | 71.24 | 69.74 |
+| EMA | 23 | 51.11 | - | - | - | - | - | - |
+
+- LR-B improves the final best AP over LR-A by only 0.04 points. This is too
+  small to establish a learning-rate winner from one seed.
+- LR-B is consistently 0.3-0.8 AP ahead through much of the middle and late
+  training trajectory, but LR-A nearly catches up after the epoch-20 step
+  drop.
+- The step drop is the robust optimization result. From epoch 19 to epoch 20,
+  regular AP rises by 1.64 points for LR-A and 1.13 points for LR-B; EMA AP
+  rises by 0.74 and 0.55 points, respectively.
+- LR-B trades APs (-0.55 versus LR-A) for slightly higher AP50, APl, and
+  AR100. These scale differences also require a repeat seed before being
+  treated as real.
 
 Unified benchmark protocol:
 
@@ -512,11 +528,27 @@ Unified benchmark protocol:
 - One multiply-add is counted as one FLOP. `grid_sampler` remains ignored, matching the RF-DETR utility convention.
 - These timings are PyTorch eager results and must not be compared directly with TensorRT latency from a paper.
 
-Existing P3/P4/P5 E1 benchmark at 576:
+P3/P4 and P3/P4/P5 benchmarks at 576:
 
-| Params | GFLOPs | Repo count without SDPA | FP32/TF32 mean | FP32 p50 | FP32 peak memory | AMP mean |
-|---:|---:|---:|---:|---:|---:|---:|
-| 42.60M | 62.89 | 47.11 | 19.95 ms | 19.27 ms | 249.37 MiB | 27.20 ms |
+| Levels | Params | GFLOPs | FP32/TF32 mean | FP32 p50 | FP32 peak memory | Peak train memory |
+|---|---:|---:|---:|---:|---:|---:|
+| P3/P4 | 35.74M | 60.51 | 15.85 ms | 15.85 ms | 222.53 MiB | 14,629 MiB |
+| P3/P4/P5 | 42.60M | 62.89 | 19.95 ms | 19.27 ms | 249.37 MiB | 15,527 MiB |
+
+Adding P5 to P3/P4 changes the measured cost as follows:
+
+- Parameters: +6.86M (+19.18%).
+- GFLOPs: +2.38 (+3.93%).
+- FP32/TF32 eager p50 latency: +3.42 ms (+21.59%).
+- Peak inference allocation: +26.84 MiB (+12.06%).
+- Peak per-process training allocation: about +898 MiB (+6.14%).
+- Accuracy under the matched LR-A recipe: +0.52 AP, including +0.54 APs and
+  +0.89 APl.
+
+P3/P4 is therefore the efficiency-oriented baseline. It retains about 82% of
+the P3/P4/P5 gain over P4 while avoiding the expensive P5 projector branch.
+P3/P4/P5 remains the accuracy-oriented option, but its extra 0.52 AP should be
+reported with its parameter and latency cost.
 
 AMP is slower in this eager-mode benchmark, most likely because autocast and mixed-kernel dispatch overhead dominate at batch size 1. It should not be treated as TensorRT/FP16 deployment performance.
 
