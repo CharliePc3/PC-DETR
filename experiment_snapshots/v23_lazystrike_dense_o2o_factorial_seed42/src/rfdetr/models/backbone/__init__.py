@@ -1,0 +1,141 @@
+# ------------------------------------------------------------------------
+# RF-DETR
+# Copyright (c) 2025 Roboflow. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
+# ------------------------------------------------------------------------
+# Copied and modified from LW-DETR (https://github.com/Atten4Vis/LW-DETR)
+# Copyright (c) 2024 Baidu. All Rights Reserved.
+# ------------------------------------------------------------------------
+
+from typing import Callable, Dict, List
+
+import torch
+from torch import nn
+
+from rfdetr.models.backbone.backbone import *
+from rfdetr.models.backbone.dinov3 import DinoV3Backbone
+from rfdetr.models.position_encoding import build_position_encoding
+from rfdetr.util.misc import NestedTensor
+
+
+class Joiner(nn.Sequential):
+    def __init__(self, backbone, position_embedding):
+        super().__init__(backbone, position_embedding)
+        self._export = False
+
+    def forward(self, tensor_list: NestedTensor):
+        """ """
+        x = self[0](tensor_list)
+        pos = []
+        for x_ in x:
+            pos.append(self[1](x_, align_dim_orders=False).to(x_.tensors.dtype))
+        return x, pos
+
+    def export(self):
+        self._export = True
+        self._forward_origin = self.forward
+        self.forward = self.forward_export
+        for name, m in self.named_modules():
+            if (
+                hasattr(m, "export")
+                and isinstance(m.export, Callable)
+                and hasattr(m, "_export")
+                and not m._export
+            ):
+                m.export()
+
+    def forward_export(self, inputs: torch.Tensor):
+        feats, masks = self[0](inputs)
+        poss = []
+        for feat, mask in zip(feats, masks):
+            poss.append(self[1](mask, align_dim_orders=False).to(feat.dtype))
+        return feats, None, poss
+
+
+def build_backbone(
+    encoder,
+    vit_encoder_num_layers,
+    pretrained_encoder,
+    window_block_indexes,
+    drop_path,
+    out_channels,
+    out_feature_indexes,
+    projector_scale,
+    use_cls_token,
+    hidden_dim,
+    position_embedding,
+    freeze_encoder,
+    layer_norm,
+    target_shape,
+    rms_norm,
+    backbone_lora,
+    force_no_pretrain,
+    gradient_checkpointing,
+    load_encoder_weights,
+    patch_size,
+    num_windows,
+    positional_encoding_size,
+    register_border_tokens=0,
+    register_fill="randn",
+    register_noise_std=1.0,
+    feature_adapter="none",
+    feature_adapter_init_scale=1.0,
+    projector_type="multiscale",
+    projector_p5_mode="full",
+    projector_source_indexes=None,
+    sdsr_rank_channels=64,
+    sdsr_detail_channels=32,
+    sdsr_use_local_reassembly=True,
+    sdsr_use_directional_guide=True,
+    sdsr_use_phase_downsample=True,
+    sdsr_cross_scale_mode="none",
+    sdsr_cross_scale_rank=32,
+):
+    """
+    Useful args:
+        - encoder: encoder name
+        - lr_encoder:
+        - dilation
+        - use_checkpoint: for swin only for now
+
+    """
+    position_embedding = build_position_encoding(hidden_dim, position_embedding)
+
+    backbone = Backbone(
+        encoder,
+        pretrained_encoder,
+        window_block_indexes=window_block_indexes,
+        drop_path=drop_path,
+        out_channels=out_channels,
+        out_feature_indexes=out_feature_indexes,
+        projector_scale=projector_scale,
+        use_cls_token=use_cls_token,
+        layer_norm=layer_norm,
+        freeze_encoder=freeze_encoder,
+        target_shape=target_shape,
+        rms_norm=rms_norm,
+        backbone_lora=backbone_lora,
+        gradient_checkpointing=gradient_checkpointing,
+        load_encoder_weights=load_encoder_weights,
+        patch_size=patch_size,
+        num_windows=num_windows,
+        positional_encoding_size=positional_encoding_size,
+        register_border_tokens=register_border_tokens,
+        register_fill=register_fill,
+        register_noise_std=register_noise_std,
+        feature_adapter=feature_adapter,
+        feature_adapter_init_scale=feature_adapter_init_scale,
+        projector_type=projector_type,
+        projector_p5_mode=projector_p5_mode,
+        projector_source_indexes=projector_source_indexes,
+        sdsr_rank_channels=sdsr_rank_channels,
+        sdsr_detail_channels=sdsr_detail_channels,
+        sdsr_use_local_reassembly=sdsr_use_local_reassembly,
+        sdsr_use_directional_guide=sdsr_use_directional_guide,
+        sdsr_use_phase_downsample=sdsr_use_phase_downsample,
+        sdsr_cross_scale_mode=sdsr_cross_scale_mode,
+        sdsr_cross_scale_rank=sdsr_cross_scale_rank,
+    )
+
+    model = Joiner(backbone, position_embedding)
+    return model

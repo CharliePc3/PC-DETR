@@ -53,6 +53,11 @@ def parse_args():
     parser.add_argument("--warmup", type=int, default=50)
     parser.add_argument("--repeats", type=int, default=200)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--skip-flops",
+        action="store_true",
+        help="Skip JIT FLOP tracing, which does not support the segmentation-head einsum.",
+    )
     return parser.parse_args()
 
 
@@ -73,8 +78,72 @@ def build_model(checkpoint):
         "num_queries": checkpoint_arg(saved_args, "num_queries", 300),
         "num_select": checkpoint_arg(saved_args, "num_select", 300),
         "group_detr": checkpoint_arg(saved_args, "group_detr", 13),
+        "dec_n_points": checkpoint_arg(saved_args, "dec_n_points", 2),
+        "lite_refpoint_refine": checkpoint_arg(
+            saved_args, "lite_refpoint_refine", True
+        ),
+        "bbox_refine_mode": checkpoint_arg(
+            saved_args, "bbox_refine_mode", "shared"
+        ),
+        "query_init": checkpoint_arg(saved_args, "query_init", "learned"),
+        "query_memory_detach": checkpoint_arg(
+            saved_args, "query_memory_detach", True
+        ),
+        "query_init_gate": checkpoint_arg(saved_args, "query_init_gate", 0.0),
+        "scale_routing": checkpoint_arg(saved_args, "scale_routing", False),
+        "scale_routing_mode": checkpoint_arg(
+            saved_args, "scale_routing_mode", "legacy"
+        ),
+        "scale_routing_layers": checkpoint_arg(
+            saved_args, "scale_routing_layers", None
+        ),
+        "p5_attention_bias": checkpoint_arg(
+            saved_args, "p5_attention_bias", 0.0
+        ),
         "out_feature_indexes": checkpoint_arg(saved_args, "out_feature_indexes", [2, 5, 8, 11]),
         "projector_scale": checkpoint_arg(saved_args, "projector_scale", ["P4"]),
+        "projector_source_indexes": checkpoint_arg(
+            saved_args, "projector_source_indexes", None
+        ),
+        "projector_source_mode": checkpoint_arg(
+            saved_args, "projector_source_mode", "mask"
+        ),
+        "projector_c2f_blocks": checkpoint_arg(
+            saved_args, "projector_c2f_blocks", None
+        ),
+        "projector_resample_share": checkpoint_arg(
+            saved_args, "projector_resample_share", "none"
+        ),
+        "projector_type": checkpoint_arg(
+            saved_args, "projector_type", "multiscale"
+        ),
+        "projector_p5_mode": checkpoint_arg(
+            saved_args, "projector_p5_mode", "full"
+        ),
+        "sdsr_rank_channels": checkpoint_arg(
+            saved_args, "sdsr_rank_channels", 64
+        ),
+        "sdsr_detail_channels": checkpoint_arg(
+            saved_args, "sdsr_detail_channels", 32
+        ),
+        "sdsr_use_local_reassembly": checkpoint_arg(
+            saved_args, "sdsr_use_local_reassembly", True
+        ),
+        "sdsr_use_directional_guide": checkpoint_arg(
+            saved_args, "sdsr_use_directional_guide", True
+        ),
+        "sdsr_use_phase_downsample": checkpoint_arg(
+            saved_args, "sdsr_use_phase_downsample", True
+        ),
+        "sdsr_cross_scale_mode": checkpoint_arg(
+            saved_args, "sdsr_cross_scale_mode", "none"
+        ),
+        "sdsr_cross_scale_rank": checkpoint_arg(
+            saved_args, "sdsr_cross_scale_rank", 32
+        ),
+        "detector_init_seed": checkpoint_arg(
+            saved_args, "detector_init_seed", None
+        ),
         "positional_encoding_size": checkpoint_arg(saved_args, "positional_encoding_size", 36),
         "use_cdn": checkpoint_arg(saved_args, "use_cdn", False),
         "dn_number": checkpoint_arg(saved_args, "dn_number", 50),
@@ -86,6 +155,11 @@ def build_model(checkpoint):
         "register_noise_std": checkpoint_arg(saved_args, "register_noise_std", 1.0),
         "feature_adapter": checkpoint_arg(saved_args, "feature_adapter", "none"),
         "feature_adapter_init_scale": checkpoint_arg(saved_args, "feature_adapter_init_scale", 1.0),
+        "segmentation_head": checkpoint_arg(saved_args, "segmentation_head", False),
+        "mask_downsample_ratio": checkpoint_arg(
+            saved_args, "mask_downsample_ratio", 4
+        ),
+        "mask_feature_levels": checkpoint_arg(saved_args, "mask_feature_levels", 1),
     }
     detector = RFDETRDINOv3(pretrain_weights=None, **config)
     model = detector.model.model
@@ -160,17 +234,25 @@ def main():
     inputs = [image]
     parameters = sum(parameter.numel() for parameter in model.parameters())
 
-    with torch.inference_mode():
-        detailed_flops = dict(
-            flop_count(
-                model,
-                (inputs,),
-                customized_ops={"aten::scaled_dot_product_attention": sdpa_flop_jit},
+    if args.skip_flops:
+        detailed_flops = {}
+        sdpa_gflops = None
+        total_gflops = None
+    else:
+        with torch.inference_mode():
+            detailed_flops = dict(
+                flop_count(
+                    model,
+                    (inputs,),
+                    customized_ops={
+                        "aten::scaled_dot_product_attention": sdpa_flop_jit
+                    },
+                )
             )
+        sdpa_gflops = float(
+            detailed_flops.get("scaled_dot_product_attention", 0.0)
         )
-
-    sdpa_gflops = float(detailed_flops.get("scaled_dot_product_attention", 0.0))
-    total_gflops = float(sum(detailed_flops.values()))
+        total_gflops = float(sum(detailed_flops.values()))
 
     results = {
         "timestamp": datetime.now().astimezone().isoformat(),
@@ -188,10 +270,13 @@ def main():
             "pytorch_mode": "eager",
             "postprocess_included": False,
             "tf32_enabled": True,
+            "flop_tracing_skipped": args.skip_flops,
         },
         "parameters": parameters,
         "gflops": total_gflops,
-        "repo_supported_gflops_without_sdpa": total_gflops - sdpa_gflops,
+        "repo_supported_gflops_without_sdpa": (
+            None if total_gflops is None else total_gflops - sdpa_gflops
+        ),
         "sdpa_gflops": sdpa_gflops,
         "flop_convention": "One multiply-add is counted as one FLOP; SDPA QK^T and attention-V are included; grid_sampler remains ignored as in the RF-DETR utility.",
         "detailed_gflops": detailed_flops,

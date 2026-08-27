@@ -1,0 +1,121 @@
+ D BACKBONE_REFINEMENT_STAGE_SUMMARY.md
+ M run_coco_subset.py
+ M src/rfdetr/config.py
+ M src/rfdetr/engine.py
+ M src/rfdetr/main.py
+ M src/rfdetr/models/backbone/__init__.py
+ M src/rfdetr/models/backbone/backbone.py
+ M src/rfdetr/models/backbone/projector.py
+ M src/rfdetr/models/lwdetr.py
+ M src/rfdetr/models/ops/modules/ms_deform_attn.py
+ M src/rfdetr/models/segmentation_head.py
+ M src/rfdetr/models/transformer.py
+ M tests/test_semantic_reassembly_projector.py
+ M tools/benchmark_detector.py
+?? .codecov.yml
+?? .github/
+?? .pre-commit-config.yaml
+?? BACKBONE_REFINE_RETENTION_PLAN.md
+?? BACKBONE_REFINE_RETENTION_RESULTS.md
+?? C2F_ASYMMETRIC_STAGE2_RESULTS.md
+?? CHEAP_P5_MEDIUM_STABILITY.md
+?? INTEGRATED_REFINEMENT_PLAN.md
+?? LICENSE
+?? MEDIUM_AP36_MILESTONE.md
+?? RESAMPLE_SHARING_STAGE3_RESULTS.md
+?? SDSR_V36_MILESTONE.md
+?? SEGMENTATION_DIRECTION_AND_INITIAL_RESULTS.md
+?? STANDARDIZED_LATENCY_200MS.md
+?? experiment_snapshots/
+?? handoff/
+?? run_backbone_refine_retention_stage1.sh
+?? run_c2f_asymmetric_stage2_phase1.sh
+?? run_c2f_asymmetric_stage2_phase2.sh
+?? run_c2f_asymmetric_variant.sh
+?? run_cheap_p5_medium.sh
+?? run_decoder_ablation_queue.sh
+?? run_integrated_refinement_s2_denseo2o.sh
+?? run_matcher_quality_medium_gpu1.sh
+?? run_online_backbone_refinement_stage1.sh
+?? run_online_backbone_refinement_stage2.sh
+?? run_online_refinement_token_diagnostics.sh
+?? run_posthoc_backbone_refinement.sh
+?? run_posthoc_backbone_refinement_eval.sh
+?? run_resample_sharing_stage3.sh
+?? run_resample_sharing_variant.sh
+?? run_scale_selective_msp_a1_a4_gpu3.sh
+?? run_scale_selective_msp_a1_validation.sh
+?? run_scale_selective_msp_single_factor.sh
+?? run_sdsr_target_medium.sh
+?? run_sdsr_v10_medium_variant.sh
+?? run_sdsr_v2_medium_ablation_gpu0.sh
+?? run_sdsr_v37_routed_c2f_medium_gpu1.sh
+?? run_sdsr_v38_adaptive_c2f_medium_gpu1.sh
+?? run_sdsr_v39_p4_routing_seed43_gpu1.sh
+?? run_sdsr_v3_medium_variant.sh
+?? run_sdsr_v4_medium_variant.sh
+?? run_sdsr_v5_medium_variant.sh
+?? run_sdsr_v6_medium_variant.sh
+?? run_sdsr_v7_medium_variant.sh
+?? run_sdsr_v8_medium_variant.sh
+?? run_sdsr_v9_medium_variant.sh
+?? run_v23_lazystrike_dense_o2o_factorial_gpu0.sh
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v10.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v11.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v12.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v13.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v14.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v15.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v16.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v17.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v18.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v19.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v2.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v20.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v21.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v22.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v23.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v24.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v25.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v26.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v27.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v28.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v29.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v3.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v30.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v31.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v32.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v33.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v34.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v35.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v36.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v37.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v38.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v39.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v4.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v5.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v6.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v7.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v8.py
+?? src/rfdetr/models/backbone/semantic_reassembly_projector_v9.py
+?? src/rfdetr/models/eomt.py
+?? src/rfdetr/models/insid3.py
+?? tests/test_backbone_refinement_retention.py
+?? tests/test_bbox_refinement.py
+?? tests/test_eomt.py
+?? tests/test_insid3.py
+?? tests/test_lightweight_p5_projector.py
+?? tests/test_matcher_quality_control.py
+?? tests/test_online_backbone_refinement.py
+?? tests/test_projector_distillation.py
+?? tests/test_scale_routing.py
+?? tests/test_segmentation_head_multiscale.py
+?? tools/benchmark_sdsr_projector.py
+?? tools/benchmark_standardized_latency.py
+?? tools/convert_sdsr_v23_to_v36.py
+?? tools/extract_dinov3_backbone.py
+?? tools/probe_insid3_coco.py
+?? tools/replace_dinov3_backbone.py
+?? tools/smoke_eomt.py
+?? tools/train_eomt_coco_subset.py
+?? tools/visualize_segmentation_checkpoint.py
