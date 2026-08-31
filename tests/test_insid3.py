@@ -79,3 +79,6 @@ def test_predict_from_features_recovers_matching_cluster():
     assert result.seed_cluster == 0
     assert result.num_clusters == 2
     assert result.num_candidate_patches == 2
+    assert result.cluster_scores.shape == (2,)
+    assert result.score_map.shape == (2, 2)
+    assert torch.isfinite(result.score_map).all()

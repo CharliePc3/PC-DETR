@@ -25,6 +25,8 @@ class InContextSegmentationResult:
     seed_cluster: int
     num_clusters: int
     num_candidate_patches: int
+    cluster_scores: torch.Tensor
+    score_map: torch.Tensor
 
 
 def compute_cluster_prototypes(
@@ -267,6 +269,7 @@ class DinoV3InContextSegmenter(nn.Module):
 
         if not candidate_mask.any():
             empty = torch.zeros_like(candidate_mask)
+            cluster_scores = raw_target.new_zeros(num_clusters)
             return InContextSegmentationResult(
                 mask=empty,
                 candidate_mask=candidate_mask,
@@ -274,6 +277,8 @@ class DinoV3InContextSegmenter(nn.Module):
                 seed_cluster=-1,
                 num_clusters=num_clusters,
                 num_candidate_patches=0,
+                cluster_scores=cluster_scores,
+                score_map=cluster_scores[label_grid],
             )
 
         candidate_cluster_ids, candidate_counts = torch.unique(
@@ -319,4 +324,6 @@ class DinoV3InContextSegmenter(nn.Module):
             seed_cluster=seed_cluster,
             num_clusters=num_clusters,
             num_candidate_patches=int(candidate_mask.sum().item()),
+            cluster_scores=scores,
+            score_map=scores[label_grid],
         )
