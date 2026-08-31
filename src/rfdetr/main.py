@@ -720,11 +720,14 @@ class Model:
                 sampler_train.set_epoch(epoch)
 
             model.train()
+            core_model = model.module if hasattr(model, "module") else model
+            for module in core_model.modules():
+                if module is not core_model and hasattr(module, "set_epoch"):
+                    module.set_epoch(epoch)
             if getattr(args, "segmentation_head_only", False):
                 # `model.train()` recursively enables stochastic/stateful layers in
                 # the frozen detector. Keep that feature extractor deterministic
                 # while allowing the mask head itself to train.
-                core_model = model.module if hasattr(model, "module") else model
                 core_model.eval()
                 core_model.segmentation_head.train()
             criterion.train()
@@ -1482,6 +1485,19 @@ def get_args_parser():
             "sdsr_v38_p4",
             "sdsr_v38_both",
             "sdsr_v39_p4_static",
+            "sdsr_v40_p4_fixed",
+            "sdsr_v40_p4_learnable",
+            "sdsr_v40_p4_bounded_dynamic",
+            "sdsr_v41_p3_uniform",
+            "sdsr_v41_p3_shallow",
+            "sdsr_v42_p5_uniform",
+            "sdsr_v42_p5_deep",
+            "sdsr_v43_spatial010",
+            "sdsr_v43_spatial020",
+            "sdsr_v44_repc3",
+            "sdsr_v44_c3k2",
+            "sdsr_v45_spatial_centered020",
+            "sdsr_v46_annealed_centered020",
         ),
     )
     parser.add_argument(

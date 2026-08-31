@@ -14,4 +14,5 @@ runs/
 *.lock
 nohup.out
 tmp_objects365_manifest/
+experiment_snapshots/
 .DS_Store

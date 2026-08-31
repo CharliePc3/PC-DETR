@@ -125,6 +125,38 @@ from rfdetr.models.backbone.semantic_reassembly_projector_v38 import (
 from rfdetr.models.backbone.semantic_reassembly_projector_v39 import (
     ScaleDecoupledReassemblyProjectorV39P4Static,
 )
+from rfdetr.models.backbone.semantic_reassembly_projector_v40 import (
+    STRONG_P4_GATES,
+    ScaleDecoupledReassemblyProjectorV40P4BoundedDynamic,
+    ScaleDecoupledReassemblyProjectorV40P4Fixed,
+    ScaleDecoupledReassemblyProjectorV40P4Learnable,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v41 import (
+    MILD_SHALLOW_P3_GATES,
+    ScaleDecoupledReassemblyProjectorV41P3Shallow,
+    ScaleDecoupledReassemblyProjectorV41P3Uniform,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v42 import (
+    MILD_DEEP_P5_GATES,
+    ScaleDecoupledReassemblyProjectorV42P5Deep,
+    ScaleDecoupledReassemblyProjectorV42P5Uniform,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v43 import (
+    ScaleDecoupledReassemblyProjectorV43Spatial010,
+    ScaleDecoupledReassemblyProjectorV43Spatial020,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v44 import (
+    C3k2Fusion,
+    RepC3Fusion,
+    ScaleDecoupledReassemblyProjectorV44C3k2,
+    ScaleDecoupledReassemblyProjectorV44RepC3,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v45 import (
+    ScaleDecoupledReassemblyProjectorV45SpatialCentered020,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v46 import (
+    ScaleDecoupledReassemblyProjectorV46AnnealedCentered020,
+)
 
 
 @pytest.mark.parametrize(
@@ -2494,3 +2526,304 @@ def test_sdsr_v39_static_p4_starts_exactly_from_v23_and_learns_four_logits():
     sum(output.square().mean() for output in actual).backward()
     assert p4.layer_logits.grad is not None
     assert p4.layer_logits.grad.abs().sum() > 0
+
+
+def test_sdsr_v40_variants_share_the_same_strong_prior_and_detector_rng():
+    kwargs = {
+        "in_channels": [32] * 4,
+        "out_channels": 24,
+        "levels": ["P3", "P4", "P5"],
+        "rank_channels": 8,
+        "num_blocks": 2,
+    }
+    variants = [
+        ScaleDecoupledReassemblyProjectorV40P4Fixed,
+        ScaleDecoupledReassemblyProjectorV40P4Learnable,
+        ScaleDecoupledReassemblyProjectorV40P4BoundedDynamic,
+    ]
+    features = [torch.randn(2, 32, 9, 11) for _ in range(4)]
+    outputs = []
+    rng_states = []
+    for projector_class in variants:
+        torch.manual_seed(1042)
+        model = projector_class(**kwargs)
+        rng_states.append(torch.get_rng_state().clone())
+        outputs.append(model([feature.detach().clone() for feature in features]))
+        gates = model.branches["P4"].normalized_gates(
+            features
+            if projector_class
+            is ScaleDecoupledReassemblyProjectorV40P4BoundedDynamic
+            else None
+        )
+        expected = torch.tensor(STRONG_P4_GATES)
+        if gates.ndim == 2:
+            expected = expected.expand_as(gates)
+        torch.testing.assert_close(gates, expected)
+
+    for candidate in outputs[1:]:
+        for expected_level, actual_level in zip(outputs[0], candidate):
+            torch.testing.assert_close(actual_level, expected_level, rtol=0, atol=0)
+    assert all(torch.equal(rng_states[0], state) for state in rng_states[1:])
+
+
+def test_sdsr_v41_uniform_matches_v40_and_preserves_detector_rng():
+    kwargs = {
+        "in_channels": [32] * 4,
+        "out_channels": 24,
+        "levels": ["P3", "P4", "P5"],
+        "rank_channels": 8,
+        "num_blocks": 2,
+    }
+    features = [torch.randn(2, 32, 9, 11) for _ in range(4)]
+    torch.manual_seed(1043)
+    baseline = ScaleDecoupledReassemblyProjectorV40P4Learnable(**kwargs)
+    baseline_rng = torch.get_rng_state().clone()
+    torch.manual_seed(1043)
+    candidate = ScaleDecoupledReassemblyProjectorV41P3Uniform(**kwargs)
+    candidate_rng = torch.get_rng_state().clone()
+
+    expected = baseline([feature.detach().clone() for feature in features])
+    actual = candidate([feature.detach().clone() for feature in features])
+    for expected_level, actual_level in zip(expected, actual):
+        torch.testing.assert_close(actual_level, expected_level, rtol=0, atol=0)
+    assert torch.equal(candidate_rng, baseline_rng)
+    torch.testing.assert_close(
+        candidate.branches["P3"].normalized_gates(), torch.ones(4)
+    )
+    sum(output.square().mean() for output in actual).backward()
+    assert candidate.branches["P3"].layer_logits.grad.abs().sum() > 0
+
+
+def test_sdsr_v41_shallow_starts_from_requested_normalized_gates():
+    model = ScaleDecoupledReassemblyProjectorV41P3Shallow(
+        in_channels=[32] * 4,
+        out_channels=24,
+        levels=["P3", "P4", "P5"],
+        rank_channels=8,
+        num_blocks=2,
+    )
+    torch.testing.assert_close(
+        model.branches["P3"].normalized_gates(),
+        torch.tensor(MILD_SHALLOW_P3_GATES),
+    )
+
+
+def test_sdsr_v42_uniform_matches_v40_and_preserves_detector_rng():
+    kwargs = {
+        "in_channels": [32] * 4,
+        "out_channels": 24,
+        "levels": ["P3", "P4", "P5"],
+        "rank_channels": 8,
+        "num_blocks": 2,
+    }
+    features = [torch.randn(2, 32, 9, 11) for _ in range(4)]
+    torch.manual_seed(1043)
+    baseline = ScaleDecoupledReassemblyProjectorV40P4Learnable(**kwargs)
+    baseline_rng = torch.get_rng_state().clone()
+    torch.manual_seed(1043)
+    candidate = ScaleDecoupledReassemblyProjectorV42P5Uniform(**kwargs)
+    candidate_rng = torch.get_rng_state().clone()
+
+    expected = baseline([feature.detach().clone() for feature in features])
+    actual = candidate([feature.detach().clone() for feature in features])
+    for expected_level, actual_level in zip(expected, actual):
+        torch.testing.assert_close(actual_level, expected_level, rtol=0, atol=0)
+    assert torch.equal(candidate_rng, baseline_rng)
+    torch.testing.assert_close(
+        candidate.branches["P5"].normalized_gates(), torch.ones(4)
+    )
+    sum(output.square().mean() for output in actual).backward()
+    assert candidate.branches["P5"].layer_logits.grad.abs().sum() > 0
+
+
+def test_sdsr_v42_deep_starts_from_requested_normalized_gates():
+    model = ScaleDecoupledReassemblyProjectorV42P5Deep(
+        in_channels=[32] * 4,
+        out_channels=24,
+        levels=["P3", "P4", "P5"],
+        rank_channels=8,
+        num_blocks=2,
+    )
+    torch.testing.assert_close(
+        model.branches["P5"].normalized_gates(),
+        torch.tensor(MILD_DEEP_P5_GATES),
+    )
+
+
+@pytest.mark.parametrize(
+    "projector_class",
+    [
+        ScaleDecoupledReassemblyProjectorV43Spatial010,
+        ScaleDecoupledReassemblyProjectorV43Spatial020,
+    ],
+)
+def test_sdsr_v43_starts_exactly_from_v40_and_preserves_rng(projector_class):
+    kwargs = {
+        "in_channels": [32] * 4,
+        "out_channels": 24,
+        "levels": ["P3", "P4", "P5"],
+        "rank_channels": 64,
+        "num_blocks": 2,
+    }
+    features = [torch.randn(2, 32, 9, 11) for _ in range(4)]
+    mask = torch.zeros(2, 9, 11, dtype=torch.bool)
+    mask[:, -1] = True
+    torch.manual_seed(1043)
+    baseline = ScaleDecoupledReassemblyProjectorV40P4Learnable(**kwargs)
+    baseline_rng = torch.get_rng_state().clone()
+    torch.manual_seed(1043)
+    candidate = projector_class(**kwargs)
+    candidate_rng = torch.get_rng_state().clone()
+
+    expected = baseline(
+        [feature.detach().clone() for feature in features], mask=mask
+    )
+    actual = candidate(
+        [feature.detach().clone() for feature in features], mask=mask
+    )
+    for expected_level, actual_level in zip(expected, actual):
+        torch.testing.assert_close(actual_level, expected_level, rtol=1e-6, atol=3e-6)
+    assert torch.equal(candidate_rng, baseline_rng)
+
+    p4 = candidate.branches["P4"]
+    sampled = [sampling(feature) for sampling, feature in zip(p4.base.base.sampling, features)]
+    gates = p4.spatial_gates(sampled, padding_mask=mask)
+    expected_gates = p4.base.normalized_gates()[None, :, None, None]
+    torch.testing.assert_close(gates, expected_gates.expand_as(gates))
+    sum(output.square().mean() for output in actual).backward()
+    assert p4.spatial_residual.logit_projection.weight.grad.abs().sum() > 0
+
+
+def test_sdsr_v45_is_zero_mean_bounded_and_starts_exactly_from_v40():
+    kwargs = {
+        "in_channels": [32] * 4,
+        "out_channels": 24,
+        "levels": ["P3", "P4", "P5"],
+        "rank_channels": 64,
+        "num_blocks": 2,
+    }
+    features = [torch.randn(2, 32, 9, 11) for _ in range(4)]
+    mask = torch.zeros(2, 9, 11, dtype=torch.bool)
+    mask[0, -1] = True
+    mask[1, :, -2:] = True
+    torch.manual_seed(1043)
+    baseline = ScaleDecoupledReassemblyProjectorV40P4Learnable(**kwargs)
+    baseline_rng = torch.get_rng_state().clone()
+    torch.manual_seed(1043)
+    candidate = ScaleDecoupledReassemblyProjectorV45SpatialCentered020(**kwargs)
+    candidate_rng = torch.get_rng_state().clone()
+
+    expected = baseline(
+        [feature.detach().clone() for feature in features], mask=mask
+    )
+    actual = candidate(
+        [feature.detach().clone() for feature in features], mask=mask
+    )
+    for expected_level, actual_level in zip(expected, actual):
+        torch.testing.assert_close(actual_level, expected_level, rtol=1e-6, atol=3e-6)
+    assert torch.equal(candidate_rng, baseline_rng)
+
+    p4 = candidate.branches["P4"]
+    assert p4.spatial_residual.logit_projection.bias is None
+    sum(output.square().mean() for output in actual).backward()
+    assert p4.spatial_residual.logit_projection.weight.grad.abs().sum() > 0
+
+    with torch.no_grad():
+        p4.spatial_residual.logit_projection.weight.normal_(std=0.1)
+    sampled = [
+        sampling(feature)
+        for sampling, feature in zip(p4.base.base.sampling, features)
+    ]
+    residual = p4.spatial_residual(sampled, padding_mask=mask)
+    valid = (~mask[:, None]).to(residual.dtype)
+    valid_mean = (residual * valid).sum(dim=(-2, -1)) / valid.sum(
+        dim=(-2, -1)
+    )
+    torch.testing.assert_close(valid_mean, torch.zeros_like(valid_mean), atol=1e-6, rtol=0)
+    assert residual.abs().max() <= 0.20 + 1e-6
+    assert torch.count_nonzero(residual.masked_select(mask[:, None])) == 0
+
+
+def test_sdsr_v46_anneals_to_v40_and_persists_the_final_scale():
+    kwargs = {
+        "in_channels": [32] * 4,
+        "out_channels": 24,
+        "levels": ["P3", "P4", "P5"],
+        "rank_channels": 64,
+        "num_blocks": 2,
+    }
+    features = [torch.randn(2, 32, 9, 11) for _ in range(4)]
+    mask = torch.zeros(2, 9, 11, dtype=torch.bool)
+    mask[:, -1] = True
+    torch.manual_seed(1043)
+    baseline = ScaleDecoupledReassemblyProjectorV40P4Learnable(**kwargs)
+    baseline_rng = torch.get_rng_state().clone()
+    torch.manual_seed(1043)
+    candidate = ScaleDecoupledReassemblyProjectorV46AnnealedCentered020(**kwargs)
+    candidate_rng = torch.get_rng_state().clone()
+    assert torch.equal(candidate_rng, baseline_rng)
+
+    branch = candidate.branches["P4"]
+    expected_scales = {
+        0: 1.0,
+        9: 1.0,
+        10: 0.9797464868,
+        15: 0.4288425809,
+        19: 0.0202535132,
+        20: 0.0,
+        23: 0.0,
+    }
+    for epoch, expected_scale in expected_scales.items():
+        candidate.set_epoch(epoch)
+        assert float(branch.routing_scale) == pytest.approx(expected_scale)
+
+    expected = baseline(
+        [feature.detach().clone() for feature in features], mask=mask
+    )
+    actual = candidate(
+        [feature.detach().clone() for feature in features], mask=mask
+    )
+    for expected_level, actual_level in zip(expected, actual):
+        torch.testing.assert_close(actual_level, expected_level, rtol=1e-6, atol=3e-6)
+
+    state = candidate.state_dict()
+    assert float(state["branches.P4.routing_scale"]) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("projector_class", "fusion_class"),
+    [
+        (ScaleDecoupledReassemblyProjectorV44RepC3, RepC3Fusion),
+        (ScaleDecoupledReassemblyProjectorV44C3k2, C3k2Fusion),
+    ],
+)
+def test_sdsr_v44_replaces_all_scale_fusions_and_preserves_rng(
+    projector_class, fusion_class
+):
+    kwargs = {
+        "in_channels": [32] * 4,
+        "out_channels": 24,
+        "levels": ["P3", "P4", "P5"],
+        "rank_channels": 8,
+        "num_blocks": 2,
+    }
+    torch.manual_seed(1043)
+    baseline = ScaleDecoupledReassemblyProjectorV40P4Learnable(**kwargs)
+    baseline_rng = torch.get_rng_state().clone()
+    torch.manual_seed(1043)
+    candidate = projector_class(**kwargs)
+    candidate_rng = torch.get_rng_state().clone()
+    assert torch.equal(candidate_rng, baseline_rng)
+    assert isinstance(candidate.branches["P3"].fusion, fusion_class)
+    assert isinstance(candidate.branches["P4"].base.fusion, fusion_class)
+    assert isinstance(candidate.branches["P5"].fusion, fusion_class)
+
+    features = [torch.randn(2, 32, 9, 11) for _ in range(4)]
+    outputs = candidate(features)
+    assert [output.shape for output in outputs] == [
+        (2, 24, 18, 22),
+        (2, 24, 9, 11),
+        (2, 24, 5, 6),
+    ]
+    sum(output.square().mean() for output in outputs).backward()
+    assert all(parameter.grad is not None for parameter in candidate.parameters())

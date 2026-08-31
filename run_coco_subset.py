@@ -146,6 +146,19 @@ def make_output_dir(args):
         "sdsr_v38_p4",
         "sdsr_v38_both",
         "sdsr_v39_p4_static",
+        "sdsr_v40_p4_fixed",
+        "sdsr_v40_p4_learnable",
+        "sdsr_v40_p4_bounded_dynamic",
+        "sdsr_v41_p3_uniform",
+        "sdsr_v41_p3_shallow",
+        "sdsr_v42_p5_uniform",
+        "sdsr_v42_p5_deep",
+        "sdsr_v43_spatial010",
+        "sdsr_v43_spatial020",
+        "sdsr_v44_repc3",
+        "sdsr_v44_c3k2",
+        "sdsr_v45_spatial_centered020",
+        "sdsr_v46_annealed_centered020",
     }:
         projector_tag = {
             "sdsr": "sdsr",
@@ -191,6 +204,19 @@ def make_output_dir(args):
             "sdsr_v38_p4": "sdsrv38p4",
             "sdsr_v38_both": "sdsrv38both",
             "sdsr_v39_p4_static": "sdsrv39p4static",
+            "sdsr_v40_p4_fixed": "sdsrv40p4fixed",
+            "sdsr_v40_p4_learnable": "sdsrv40p4learn",
+            "sdsr_v40_p4_bounded_dynamic": "sdsrv40p4bounddyn",
+            "sdsr_v41_p3_uniform": "sdsrv41p3uniform",
+            "sdsr_v41_p3_shallow": "sdsrv41p3shallow",
+            "sdsr_v42_p5_uniform": "sdsrv42p5uniform",
+            "sdsr_v42_p5_deep": "sdsrv42p5deep",
+            "sdsr_v43_spatial010": "sdsrv43sp010",
+            "sdsr_v43_spatial020": "sdsrv43sp020",
+            "sdsr_v44_repc3": "sdsrv44repc3",
+            "sdsr_v44_c3k2": "sdsrv44c3k2",
+            "sdsr_v45_spatial_centered020": "sdsrv45spcenter020",
+            "sdsr_v46_annealed_centered020": "sdsrv46annealcenter020",
         }[args.projector_type]
         run_tags.extend([projector_tag, f"dc{args.sdsr_detail_channels}"])
         if args.projector_type in {
@@ -236,6 +262,19 @@ def make_output_dir(args):
             "sdsr_v38_p4",
             "sdsr_v38_both",
             "sdsr_v39_p4_static",
+            "sdsr_v40_p4_fixed",
+            "sdsr_v40_p4_learnable",
+            "sdsr_v40_p4_bounded_dynamic",
+            "sdsr_v41_p3_uniform",
+            "sdsr_v41_p3_shallow",
+            "sdsr_v42_p5_uniform",
+            "sdsr_v42_p5_deep",
+            "sdsr_v43_spatial010",
+            "sdsr_v43_spatial020",
+            "sdsr_v44_repc3",
+            "sdsr_v44_c3k2",
+            "sdsr_v45_spatial_centered020",
+            "sdsr_v46_annealed_centered020",
         }:
             run_tags.append(f"rank{args.sdsr_rank_channels}")
         if args.projector_type in {
@@ -276,6 +315,19 @@ def make_output_dir(args):
             "sdsr_v38_p4",
             "sdsr_v38_both",
             "sdsr_v39_p4_static",
+            "sdsr_v40_p4_fixed",
+            "sdsr_v40_p4_learnable",
+            "sdsr_v40_p4_bounded_dynamic",
+            "sdsr_v41_p3_uniform",
+            "sdsr_v41_p3_shallow",
+            "sdsr_v42_p5_uniform",
+            "sdsr_v42_p5_deep",
+            "sdsr_v43_spatial010",
+            "sdsr_v43_spatial020",
+            "sdsr_v44_repc3",
+            "sdsr_v44_c3k2",
+            "sdsr_v45_spatial_centered020",
+            "sdsr_v46_annealed_centered020",
         }:
             run_tags.extend(
                 [
@@ -332,6 +384,19 @@ def make_output_dir(args):
                 "sdsr_v38_p4",
                 "sdsr_v38_both",
                 "sdsr_v39_p4_static",
+                "sdsr_v40_p4_fixed",
+                "sdsr_v40_p4_learnable",
+                "sdsr_v40_p4_bounded_dynamic",
+                "sdsr_v41_p3_uniform",
+                "sdsr_v41_p3_shallow",
+                "sdsr_v42_p5_uniform",
+                "sdsr_v42_p5_deep",
+                "sdsr_v43_spatial010",
+                "sdsr_v43_spatial020",
+                "sdsr_v44_repc3",
+                "sdsr_v44_c3k2",
+                "sdsr_v45_spatial_centered020",
+                "sdsr_v46_annealed_centered020",
             }
             and not args.sdsr_use_phase_downsample
         ):
@@ -685,6 +750,19 @@ def parse_args():
             "sdsr_v38_p4",
             "sdsr_v38_both",
             "sdsr_v39_p4_static",
+            "sdsr_v40_p4_fixed",
+            "sdsr_v40_p4_learnable",
+            "sdsr_v40_p4_bounded_dynamic",
+            "sdsr_v41_p3_uniform",
+            "sdsr_v41_p3_shallow",
+            "sdsr_v42_p5_uniform",
+            "sdsr_v42_p5_deep",
+            "sdsr_v43_spatial010",
+            "sdsr_v43_spatial020",
+            "sdsr_v44_repc3",
+            "sdsr_v44_c3k2",
+            "sdsr_v45_spatial_centered020",
+            "sdsr_v46_annealed_centered020",
         ),
     )
     parser.add_argument(
@@ -873,6 +951,8 @@ def parse_args():
     )
     parser.add_argument("--feature-adapter-init-scale", type=float, default=1.0)
     parser.add_argument("--use-ema", action="store_true")
+    parser.add_argument("--ema-decay", type=float, default=0.993)
+    parser.add_argument("--ema-tau", type=float, default=100.0)
     parser.add_argument(
         "--square-resize-div-64",
         action=argparse.BooleanOptionalAction,
@@ -1022,6 +1102,19 @@ def main():
             "sdsr_v38_p4",
             "sdsr_v38_both",
             "sdsr_v39_p4_static",
+            "sdsr_v40_p4_fixed",
+            "sdsr_v40_p4_learnable",
+            "sdsr_v40_p4_bounded_dynamic",
+            "sdsr_v41_p3_uniform",
+            "sdsr_v41_p3_shallow",
+            "sdsr_v42_p5_uniform",
+            "sdsr_v42_p5_deep",
+            "sdsr_v43_spatial010",
+            "sdsr_v43_spatial020",
+            "sdsr_v44_repc3",
+            "sdsr_v44_c3k2",
+            "sdsr_v45_spatial_centered020",
+            "sdsr_v46_annealed_centered020",
     }:
         if (
             args.projector_type
@@ -1068,6 +1161,19 @@ def main():
                 "sdsr_v38_p4",
                 "sdsr_v38_both",
                 "sdsr_v39_p4_static",
+                "sdsr_v40_p4_fixed",
+                "sdsr_v40_p4_learnable",
+                "sdsr_v40_p4_bounded_dynamic",
+                "sdsr_v41_p3_uniform",
+                "sdsr_v41_p3_shallow",
+                "sdsr_v42_p5_uniform",
+                "sdsr_v42_p5_deep",
+                "sdsr_v43_spatial010",
+                "sdsr_v43_spatial020",
+                "sdsr_v44_repc3",
+                "sdsr_v44_c3k2",
+                "sdsr_v45_spatial_centered020",
+                "sdsr_v46_annealed_centered020",
             }
             and args.sdsr_rank_channels < 1
         ):
@@ -1124,6 +1230,19 @@ def main():
                 "sdsr_v38_p4",
                 "sdsr_v38_both",
                 "sdsr_v39_p4_static",
+                "sdsr_v40_p4_fixed",
+                "sdsr_v40_p4_learnable",
+                "sdsr_v40_p4_bounded_dynamic",
+                "sdsr_v41_p3_uniform",
+                "sdsr_v41_p3_shallow",
+                "sdsr_v42_p5_uniform",
+                "sdsr_v42_p5_deep",
+                "sdsr_v43_spatial010",
+                "sdsr_v43_spatial020",
+                "sdsr_v44_repc3",
+                "sdsr_v44_c3k2",
+                "sdsr_v45_spatial_centered020",
+                "sdsr_v46_annealed_centered020",
             }
             and args.sdsr_cross_scale_mode != "none"
         ):
@@ -1411,6 +1530,9 @@ def main():
     log_main(f"expanded_scales={args.expanded_scales}")
     log_main(f"square_resize_div_64={args.square_resize_div_64}")
     log_main(f"aug_preset={args.aug_preset}")
+    log_main(f"use_ema={args.use_ema}")
+    log_main(f"ema_decay={args.ema_decay}")
+    log_main(f"ema_tau={args.ema_tau}")
     log_main(f"eval_max_dets={args.eval_max_dets}")
     log_main(f"segmentation_head={args.segmentation_head}")
     log_main(f"segmentation_head_only={args.segmentation_head_only}")
@@ -1533,6 +1655,8 @@ def main():
         expanded_scales=args.expanded_scales,
         aug_config=AUG_PRESETS[args.aug_preset],
         use_ema=args.use_ema,
+        ema_decay=args.ema_decay,
+        ema_tau=args.ema_tau,
         tensorboard=args.tensorboard,
         run_test=args.run_test,
         eval_max_dets=args.eval_max_dets,

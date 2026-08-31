@@ -145,6 +145,33 @@ from rfdetr.models.backbone.semantic_reassembly_projector_v38 import (
 from rfdetr.models.backbone.semantic_reassembly_projector_v39 import (
     ScaleDecoupledReassemblyProjectorV39P4Static,
 )
+from rfdetr.models.backbone.semantic_reassembly_projector_v40 import (
+    ScaleDecoupledReassemblyProjectorV40P4BoundedDynamic,
+    ScaleDecoupledReassemblyProjectorV40P4Fixed,
+    ScaleDecoupledReassemblyProjectorV40P4Learnable,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v41 import (
+    ScaleDecoupledReassemblyProjectorV41P3Shallow,
+    ScaleDecoupledReassemblyProjectorV41P3Uniform,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v42 import (
+    ScaleDecoupledReassemblyProjectorV42P5Deep,
+    ScaleDecoupledReassemblyProjectorV42P5Uniform,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v43 import (
+    ScaleDecoupledReassemblyProjectorV43Spatial010,
+    ScaleDecoupledReassemblyProjectorV43Spatial020,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v44 import (
+    ScaleDecoupledReassemblyProjectorV44C3k2,
+    ScaleDecoupledReassemblyProjectorV44RepC3,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v45 import (
+    ScaleDecoupledReassemblyProjectorV45SpatialCentered020,
+)
+from rfdetr.models.backbone.semantic_reassembly_projector_v46 import (
+    ScaleDecoupledReassemblyProjectorV46AnnealedCentered020,
+)
 from rfdetr.util.logger import get_logger
 from rfdetr.util.misc import NestedTensor
 
@@ -654,8 +681,129 @@ class Backbone(BackboneBase):
                 cross_scale_rank=sdsr_cross_scale_rank,
                 use_phase_downsample=sdsr_use_phase_downsample,
             )
+        elif projector_type in {
+            "sdsr_v41_p3_uniform",
+            "sdsr_v41_p3_shallow",
+        }:
+            projector_class = {
+                "sdsr_v41_p3_uniform": (
+                    ScaleDecoupledReassemblyProjectorV41P3Uniform
+                ),
+                "sdsr_v41_p3_shallow": (
+                    ScaleDecoupledReassemblyProjectorV41P3Shallow
+                ),
+            }[projector_type]
+            self.projector = projector_class(
+                in_channels=self.encoder._out_feature_channels,
+                out_channels=out_channels,
+                levels=self.projector_scale,
+                rank_channels=sdsr_rank_channels,
+                cross_scale_mode=sdsr_cross_scale_mode,
+                cross_scale_rank=sdsr_cross_scale_rank,
+                use_phase_downsample=sdsr_use_phase_downsample,
+            )
+        elif projector_type in {
+            "sdsr_v42_p5_uniform",
+            "sdsr_v42_p5_deep",
+        }:
+            projector_class = {
+                "sdsr_v42_p5_uniform": (
+                    ScaleDecoupledReassemblyProjectorV42P5Uniform
+                ),
+                "sdsr_v42_p5_deep": ScaleDecoupledReassemblyProjectorV42P5Deep,
+            }[projector_type]
+            self.projector = projector_class(
+                in_channels=self.encoder._out_feature_channels,
+                out_channels=out_channels,
+                levels=self.projector_scale,
+                rank_channels=sdsr_rank_channels,
+                cross_scale_mode=sdsr_cross_scale_mode,
+                cross_scale_rank=sdsr_cross_scale_rank,
+                use_phase_downsample=sdsr_use_phase_downsample,
+            )
+        elif projector_type in {
+            "sdsr_v43_spatial010",
+            "sdsr_v43_spatial020",
+        }:
+            projector_class = {
+                "sdsr_v43_spatial010": (
+                    ScaleDecoupledReassemblyProjectorV43Spatial010
+                ),
+                "sdsr_v43_spatial020": (
+                    ScaleDecoupledReassemblyProjectorV43Spatial020
+                ),
+            }[projector_type]
+            self.projector = projector_class(
+                in_channels=self.encoder._out_feature_channels,
+                out_channels=out_channels,
+                levels=self.projector_scale,
+                rank_channels=sdsr_rank_channels,
+                cross_scale_mode=sdsr_cross_scale_mode,
+                cross_scale_rank=sdsr_cross_scale_rank,
+                use_phase_downsample=sdsr_use_phase_downsample,
+            )
+        elif projector_type in {
+            "sdsr_v44_repc3",
+            "sdsr_v44_c3k2",
+        }:
+            projector_class = {
+                "sdsr_v44_repc3": ScaleDecoupledReassemblyProjectorV44RepC3,
+                "sdsr_v44_c3k2": ScaleDecoupledReassemblyProjectorV44C3k2,
+            }[projector_type]
+            self.projector = projector_class(
+                in_channels=self.encoder._out_feature_channels,
+                out_channels=out_channels,
+                levels=self.projector_scale,
+                rank_channels=sdsr_rank_channels,
+                cross_scale_mode=sdsr_cross_scale_mode,
+                cross_scale_rank=sdsr_cross_scale_rank,
+                use_phase_downsample=sdsr_use_phase_downsample,
+            )
+        elif projector_type == "sdsr_v45_spatial_centered020":
+            self.projector = ScaleDecoupledReassemblyProjectorV45SpatialCentered020(
+                in_channels=self.encoder._out_feature_channels,
+                out_channels=out_channels,
+                levels=self.projector_scale,
+                rank_channels=sdsr_rank_channels,
+                cross_scale_mode=sdsr_cross_scale_mode,
+                cross_scale_rank=sdsr_cross_scale_rank,
+                use_phase_downsample=sdsr_use_phase_downsample,
+            )
+        elif projector_type == "sdsr_v46_annealed_centered020":
+            self.projector = ScaleDecoupledReassemblyProjectorV46AnnealedCentered020(
+                in_channels=self.encoder._out_feature_channels,
+                out_channels=out_channels,
+                levels=self.projector_scale,
+                rank_channels=sdsr_rank_channels,
+                cross_scale_mode=sdsr_cross_scale_mode,
+                cross_scale_rank=sdsr_cross_scale_rank,
+                use_phase_downsample=sdsr_use_phase_downsample,
+            )
         elif projector_type == "sdsr_v39_p4_static":
             self.projector = ScaleDecoupledReassemblyProjectorV39P4Static(
+                in_channels=self.encoder._out_feature_channels,
+                out_channels=out_channels,
+                levels=self.projector_scale,
+                rank_channels=sdsr_rank_channels,
+                cross_scale_mode=sdsr_cross_scale_mode,
+                cross_scale_rank=sdsr_cross_scale_rank,
+                use_phase_downsample=sdsr_use_phase_downsample,
+            )
+        elif projector_type in {
+            "sdsr_v40_p4_fixed",
+            "sdsr_v40_p4_learnable",
+            "sdsr_v40_p4_bounded_dynamic",
+        }:
+            projector_class = {
+                "sdsr_v40_p4_fixed": ScaleDecoupledReassemblyProjectorV40P4Fixed,
+                "sdsr_v40_p4_learnable": (
+                    ScaleDecoupledReassemblyProjectorV40P4Learnable
+                ),
+                "sdsr_v40_p4_bounded_dynamic": (
+                    ScaleDecoupledReassemblyProjectorV40P4BoundedDynamic
+                ),
+            }[projector_type]
+            self.projector = projector_class(
                 in_channels=self.encoder._out_feature_channels,
                 out_channels=out_channels,
                 levels=self.projector_scale,
@@ -726,6 +874,19 @@ class Backbone(BackboneBase):
             "sdsr_v38_p4",
             "sdsr_v38_both",
             "sdsr_v39_p4_static",
+            "sdsr_v40_p4_fixed",
+            "sdsr_v40_p4_learnable",
+            "sdsr_v40_p4_bounded_dynamic",
+            "sdsr_v41_p3_uniform",
+            "sdsr_v41_p3_shallow",
+            "sdsr_v42_p5_uniform",
+            "sdsr_v42_p5_deep",
+            "sdsr_v43_spatial010",
+            "sdsr_v43_spatial020",
+            "sdsr_v44_repc3",
+            "sdsr_v44_c3k2",
+            "sdsr_v45_spatial_centered020",
+            "sdsr_v46_annealed_centered020",
         }:
             feats = self.projector(
                 feats, image=tensor_list.tensors, mask=tensor_list.mask
@@ -789,6 +950,19 @@ class Backbone(BackboneBase):
             "sdsr_v38_p4",
             "sdsr_v38_both",
             "sdsr_v39_p4_static",
+            "sdsr_v40_p4_fixed",
+            "sdsr_v40_p4_learnable",
+            "sdsr_v40_p4_bounded_dynamic",
+            "sdsr_v41_p3_uniform",
+            "sdsr_v41_p3_shallow",
+            "sdsr_v42_p5_uniform",
+            "sdsr_v42_p5_deep",
+            "sdsr_v43_spatial010",
+            "sdsr_v43_spatial020",
+            "sdsr_v44_repc3",
+            "sdsr_v44_c3k2",
+            "sdsr_v45_spatial_centered020",
+            "sdsr_v46_annealed_centered020",
         }:
             feats = self.projector(feats, image=tensors)
         else:
