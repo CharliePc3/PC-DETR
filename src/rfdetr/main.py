@@ -316,6 +316,7 @@ class Model:
         for attr in (
             "use_cdn",
             "dn_number",
+            "dn_total_query_budget",
             "dn_label_noise_scale",
             "dn_box_noise_scale",
             "dn_negative",
@@ -407,6 +408,7 @@ class Model:
                 "num_queries",
                 "group_detr",
                 "dec_n_points",
+                "dec_level_n_points",
                 "lite_refpoint_refine",
                 "bbox_refine_mode",
                 "scale_routing",
@@ -718,6 +720,8 @@ class Model:
             epoch_start_time = time.time()
             if args.distributed:
                 sampler_train.set_epoch(epoch)
+            if hasattr(dataset_train, "set_epoch"):
+                dataset_train.set_epoch(epoch)
 
             model.train()
             core_model = model.module if hasattr(model, "module") else model
@@ -1571,6 +1575,13 @@ def get_args_parser():
     parser.add_argument(
         "--dec_n_points", default=4, type=int, help="the number of sampling points"
     )
+    parser.add_argument(
+        "--dec_level_n_points",
+        default=None,
+        type=int,
+        nargs="+",
+        help="Optional per-feature-level sampling points, e.g. 2 3 1.",
+    )
     parser.add_argument("--scale_routing", action="store_true")
     parser.add_argument(
         "--scale_routing_mode", default="legacy", choices=("legacy", "cell")
@@ -1628,6 +1639,12 @@ def get_args_parser():
     parser.add_argument("--ia_bce_loss", action="store_true")
     parser.add_argument("--use_cdn", action="store_true")
     parser.add_argument("--dn_number", default=100, type=int)
+    parser.add_argument(
+        "--dn_total_query_budget",
+        default=0,
+        type=int,
+        help="Maximum DN queries across all DETR groups per batch; 0 disables the cap.",
+    )
     parser.add_argument("--dn_label_noise_scale", default=0.5, type=float)
     parser.add_argument("--dn_box_noise_scale", default=1.0, type=float)
     parser.add_argument("--no_dn_negative", dest="dn_negative", action="store_false")
@@ -1750,6 +1767,7 @@ def get_args_parser():
     parser.add_argument(
         "--expanded_scales", action="store_true", help="use expanded scales"
     )
+    parser.add_argument("--multi_scale_stop_epoch", default=-1, type=int)
     parser.add_argument(
         "--do_random_resize_via_padding",
         action="store_true",
@@ -1916,6 +1934,7 @@ def populate_args(
     bbox_refine_mode="shared",
     num_select=100,
     dec_n_points=4,
+    dec_level_n_points=None,
     decoder_norm="LN",
     bbox_reparam=False,
     freeze_batch_norm=False,
@@ -1935,6 +1954,7 @@ def populate_args(
     ia_bce_loss=False,
     use_cdn=False,
     dn_number=100,
+    dn_total_query_budget=0,
     dn_label_noise_scale=0.5,
     dn_box_noise_scale=1.0,
     dn_negative=True,
@@ -2002,6 +2022,7 @@ def populate_args(
     use_cls_token=False,
     multi_scale=False,
     expanded_scales=False,
+    multi_scale_stop_epoch=-1,
     do_random_resize_via_padding=False,
     warmup_epochs=1,
     lr_scheduler="step",
@@ -2087,6 +2108,7 @@ def populate_args(
         bbox_refine_mode=bbox_refine_mode,
         num_select=num_select,
         dec_n_points=dec_n_points,
+        dec_level_n_points=dec_level_n_points,
         decoder_norm=decoder_norm,
         bbox_reparam=bbox_reparam,
         freeze_batch_norm=freeze_batch_norm,
@@ -2104,6 +2126,7 @@ def populate_args(
         ia_bce_loss=ia_bce_loss,
         use_cdn=use_cdn,
         dn_number=dn_number,
+        dn_total_query_budget=dn_total_query_budget,
         dn_label_noise_scale=dn_label_noise_scale,
         dn_box_noise_scale=dn_box_noise_scale,
         dn_negative=dn_negative,
@@ -2166,6 +2189,7 @@ def populate_args(
         use_cls_token=use_cls_token,
         multi_scale=multi_scale,
         expanded_scales=expanded_scales,
+        multi_scale_stop_epoch=multi_scale_stop_epoch,
         do_random_resize_via_padding=do_random_resize_via_padding,
         warmup_epochs=warmup_epochs,
         lr_scheduler=lr_scheduler,

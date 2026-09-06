@@ -71,15 +71,27 @@ class MSDeformAttn(nn.Module):
         self.d_model = d_model
         self.n_levels = n_levels
         self.n_heads = n_heads
-        self.n_points = n_points
+        if isinstance(n_points, int):
+            points_per_level = (n_points,) * n_levels
+        else:
+            points_per_level = tuple(int(value) for value in n_points)
+            if len(points_per_level) != n_levels:
+                raise ValueError(
+                    f"Expected {n_levels} per-level point counts, got {points_per_level}."
+                )
+        if any(value <= 0 for value in points_per_level):
+            raise ValueError("Every feature level must use at least one sampling point.")
+        self.points_per_level = points_per_level
+        self.n_points = max(points_per_level)
+        self.total_points = sum(points_per_level)
         self.last_level_initial_bias = float(last_level_initial_bias)
         self.scale_routing = scale_routing
         if scale_routing_mode not in {"legacy", "cell"}:
             raise ValueError(f"Unsupported scale_routing_mode: {scale_routing_mode}")
         self.scale_routing_mode = scale_routing_mode
 
-        self.sampling_offsets = nn.Linear(d_model, n_heads * n_levels * n_points * 2)
-        self.attention_weights = nn.Linear(d_model, n_heads * n_levels * n_points)
+        self.sampling_offsets = nn.Linear(d_model, n_heads * self.total_points * 2)
+        self.attention_weights = nn.Linear(d_model, n_heads * self.total_points)
         self.value_proj = nn.Linear(d_model, d_model)
         self.output_proj = nn.Linear(d_model, d_model)
         if scale_routing:
@@ -108,21 +120,28 @@ class MSDeformAttn(nn.Module):
         constant_(self.sampling_offsets.weight.data, 0.0)
         thetas = torch.arange(self.n_heads, dtype=torch.float32) * (2.0 * math.pi / self.n_heads)
         grid_init = torch.stack([thetas.cos(), thetas.sin()], -1)
-        grid_init = (
-            (grid_init / grid_init.abs().max(-1, keepdim=True)[0])
-            .view(self.n_heads, 1, 1, 2)
-            .repeat(1, self.n_levels, self.n_points, 1)
+        directions = (grid_init / grid_init.abs().max(-1, keepdim=True)[0]).view(
+            self.n_heads, 1, 2
         )
-        for i in range(self.n_points):
-            grid_init[:, :, i, :] *= i + 1
+        grid_init = torch.cat(
+            [directions.repeat(1, count, 1) for count in self.points_per_level],
+            dim=1,
+        )
+        point_index = torch.cat(
+            [torch.arange(1, count + 1) for count in self.points_per_level]
+        ).to(grid_init)
+        grid_init *= point_index[None, :, None]
         with torch.no_grad():
             self.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
         constant_(self.attention_weights.weight.data, 0.0)
         constant_(self.attention_weights.bias.data, 0.0)
         if self.last_level_initial_bias != 0.0:
             with torch.no_grad():
-                attention_bias = self.attention_weights.bias.view(self.n_heads, self.n_levels, self.n_points)
-                attention_bias[:, -1].fill_(self.last_level_initial_bias)
+                level_start = sum(self.points_per_level[:-1])
+                attention_bias = self.attention_weights.bias.view(
+                    self.n_heads, self.total_points
+                )
+                attention_bias[:, level_start:].fill_(self.last_level_initial_bias)
         xavier_uniform_(self.value_proj.weight.data)
         constant_(self.value_proj.bias.data, 0.0)
         xavier_uniform_(self.output_proj.weight.data)
@@ -166,8 +185,12 @@ class MSDeformAttn(nn.Module):
         if input_padding_mask is not None:
             value = value.masked_fill(input_padding_mask[..., None], float(0))
 
-        sampling_offsets = self.sampling_offsets(query).view(N, Len_q, self.n_heads, self.n_levels, self.n_points, 2)
-        attention_weights = self.attention_weights(query).view(N, Len_q, self.n_heads, self.n_levels * self.n_points)
+        sampling_offsets_flat = self.sampling_offsets(query).view(
+            N, Len_q, self.n_heads, self.total_points, 2
+        )
+        attention_weights_flat = self.attention_weights(query).view(
+            N, Len_q, self.n_heads, self.total_points
+        )
         if self.scale_router is not None:
             if reference_points.shape[-1] != 4:
                 raise ValueError("Scale routing requires 4D reference boxes.")
@@ -200,8 +223,41 @@ class MSDeformAttn(nn.Module):
                 routing_query = query[:, :, None].expand(-1, -1, self.n_levels, -1)
                 level_bias = self.scale_router(torch.cat([routing_query, box_geometry], dim=-1))
                 level_bias = level_bias.permute(0, 1, 3, 2).unsqueeze(-1)
-            level_bias = level_bias.expand(-1, -1, -1, -1, self.n_points)
-            attention_weights = attention_weights + level_bias.flatten(-2)
+            level_bias = torch.cat(
+                [
+                    level_bias[..., level_index, :].expand(
+                        -1, -1, -1, self.points_per_level[level_index]
+                    )
+                    for level_index in range(self.n_levels)
+                ],
+                dim=-1,
+            )
+            attention_weights_flat = attention_weights_flat + level_bias
+
+        offset_levels = torch.split(
+            sampling_offsets_flat, self.points_per_level, dim=3
+        )
+        weight_levels = torch.split(
+            attention_weights_flat, self.points_per_level, dim=3
+        )
+        sampling_offsets = torch.stack(
+            [
+                F.pad(level, (0, 0, 0, self.n_points - level.shape[3]))
+                for level in offset_levels
+            ],
+            dim=3,
+        )
+        attention_weights = torch.stack(
+            [
+                F.pad(
+                    level,
+                    (0, self.n_points - level.shape[3]),
+                    value=float("-inf"),
+                )
+                for level in weight_levels
+            ],
+            dim=3,
+        )
 
         # N, Len_q, n_heads, n_levels, n_points, 2
         if reference_points.shape[-1] == 2:
@@ -213,13 +269,18 @@ class MSDeformAttn(nn.Module):
         elif reference_points.shape[-1] == 4:
             sampling_locations = (
                 reference_points[:, :, None, :, None, :2]
-                + sampling_offsets / self.n_points * reference_points[:, :, None, :, None, 2:] * 0.5
+                + sampling_offsets
+                / sampling_offsets.new_tensor(self.points_per_level)[None, None, None, :, None, None]
+                * reference_points[:, :, None, :, None, 2:]
+                * 0.5
             )
         else:
             raise ValueError(
                 "Last dim of reference_points must be 2 or 4, but get {} instead.".format(reference_points.shape[-1])
             )
-        attention_weights = F.softmax(attention_weights, -1)
+        attention_weights = F.softmax(attention_weights.flatten(-2), -1).view(
+            N, Len_q, self.n_heads, self.n_levels, self.n_points
+        )
 
         value = value.transpose(1, 2).contiguous().view(N, self.n_heads, self.d_model // self.n_heads, Len_in)
         output = ms_deform_attn_core_pytorch(value, input_spatial_shapes, sampling_locations, attention_weights)

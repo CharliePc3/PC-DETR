@@ -155,6 +155,7 @@ class ModelConfig(BaseConfig):
     sa_nheads: int
     ca_nheads: int
     dec_n_points: int
+    dec_level_n_points: Optional[Tuple[int, ...]] = None
     bbox_reparam: bool = True
     lite_refpoint_refine: bool = True
     bbox_refine_mode: Literal["shared", "layerwise", "residual"] = "shared"
@@ -181,6 +182,7 @@ class ModelConfig(BaseConfig):
     cls_loss_coef: float = 1.0
     use_cdn: bool = False
     dn_number: int = 100
+    dn_total_query_budget: int = 0
     dn_label_noise_scale: float = 0.5
     dn_box_noise_scale: float = 1.0
     dn_negative: bool = True
@@ -532,6 +534,7 @@ class TrainConfig(BaseModel):
     cls_loss_coef: float = 1.0
     use_cdn: bool = False
     dn_number: int = 100
+    dn_total_query_budget: int = 0
     dn_label_noise_scale: float = 0.5
     dn_box_noise_scale: float = 1.0
     dn_negative: bool = True
@@ -567,6 +570,7 @@ class TrainConfig(BaseModel):
     output_dir: str = "output"
     multi_scale: bool = True
     expanded_scales: bool = True
+    multi_scale_stop_epoch: int = -1
     do_random_resize_via_padding: bool = False
     use_ema: bool = True
     num_workers: int = 2

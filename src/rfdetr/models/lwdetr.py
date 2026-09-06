@@ -71,6 +71,7 @@ class LWDETR(nn.Module):
         bbox_reparam=False,
         use_cdn=False,
         dn_number=100,
+        dn_total_query_budget=0,
         dn_label_noise_scale=0.5,
         dn_box_noise_scale=1.0,
         dn_negative=True,
@@ -105,6 +106,7 @@ class LWDETR(nn.Module):
         self.group_detr = group_detr
         self.use_cdn = use_cdn
         self.dn_number = dn_number
+        self.dn_total_query_budget = dn_total_query_budget
         self.dn_label_noise_scale = dn_label_noise_scale
         self.dn_box_noise_scale = dn_box_noise_scale
         self.dn_negative = dn_negative
@@ -252,6 +254,7 @@ class LWDETR(nn.Module):
                 bbox_reparam=self.bbox_reparam,
                 dn_negative=self.dn_negative,
                 group_detr=self.group_detr,
+                dn_total_query_budget=self.dn_total_query_budget,
             )
 
         hs, ref_unsigmoid, hs_enc, ref_enc = self.transformer(
@@ -1143,13 +1146,28 @@ class SetCriterion(nn.Module):
             )
 
         if "dn_meta" in outputs:
+            dn_num_boxes = outputs["dn_meta"].get(
+                "selected_gt_count", sum(len(t["labels"]) for t in targets)
+            )
+            if not self.sum_group_losses:
+                dn_num_boxes = dn_num_boxes * group_detr
+            dn_num_boxes = torch.as_tensor(
+                [dn_num_boxes],
+                dtype=torch.float,
+                device=next(iter(outputs.values())).device,
+            )
+            if is_dist_avail_and_initialized():
+                torch.distributed.all_reduce(dn_num_boxes)
+            dn_num_boxes = torch.clamp(
+                dn_num_boxes / get_world_size(), min=1
+            ).item()
             losses.update(
                 compute_cdn_loss(
                     outputs["dn_meta"],
                     targets,
                     self.num_classes,
                     self.focal_alpha,
-                    num_boxes,
+                    dn_num_boxes,
                     normalizer_group_detr=group_detr if self.sum_group_losses else 1,
                 )
             )
@@ -1544,6 +1562,7 @@ def build_model(args):
         bbox_reparam=args.bbox_reparam,
         use_cdn=args.use_cdn,
         dn_number=args.dn_number,
+        dn_total_query_budget=getattr(args, "dn_total_query_budget", 0),
         dn_label_noise_scale=args.dn_label_noise_scale,
         dn_box_noise_scale=args.dn_box_noise_scale,
         dn_negative=args.dn_negative,

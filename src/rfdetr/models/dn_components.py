@@ -23,6 +23,20 @@ def _noised_boxes(boxes, box_noise_scale, negative=False):
     return boxes.clamp(min=0.0, max=1.0)
 
 
+def _select_area_stratified_indices(boxes, max_targets):
+    """Keep a deterministic spread of small-to-large boxes for CDN supervision."""
+    num_targets = len(boxes)
+    if max_targets <= 0 or num_targets <= max_targets:
+        return torch.arange(num_targets, device=boxes.device)
+
+    areas = boxes[:, 2] * boxes[:, 3]
+    area_order = torch.argsort(areas)
+    sample_positions = torch.linspace(
+        0, num_targets - 1, steps=max_targets, device=boxes.device
+    ).round().long()
+    return area_order[sample_positions]
+
+
 def prepare_for_cdn(
     targets,
     dn_number,
@@ -35,6 +49,7 @@ def prepare_for_cdn(
     bbox_reparam,
     dn_negative=True,
     group_detr=1,
+    dn_total_query_budget=0,
 ):
     if dn_number <= 0:
         return None, None, None, None
@@ -42,13 +57,37 @@ def prepare_for_cdn(
     device = label_embed.weight.device
     dtype = label_embed.weight.dtype
     batch_size = len(targets)
-    known_num = [len(t["labels"]) for t in targets]
+    original_known_num = [len(t["labels"]) for t in targets]
+    max_gt_per_image = None
+    per_group_query_budget = 0
+    if dn_total_query_budget > 0:
+        pair_size = 2 if dn_negative else 1
+        per_group_query_budget = dn_total_query_budget // group_detr
+        max_gt_per_image = per_group_query_budget // pair_size
+        if max_gt_per_image < 1:
+            raise ValueError(
+                "dn_total_query_budget must provide at least one DN target per "
+                f"group; got budget={dn_total_query_budget}, group_detr={group_detr}."
+            )
+
+    selected_target_indices = []
+    for target in targets:
+        boxes = target["boxes"].to(device)
+        selected_target_indices.append(
+            _select_area_stratified_indices(boxes, max_gt_per_image)
+            if max_gt_per_image is not None
+            else torch.arange(len(boxes), device=device)
+        )
+
+    known_num = [len(indices) for indices in selected_target_indices]
     max_gt = max(known_num) if known_num else 0
     if max_gt == 0:
         return None, None, None, None
 
     group_size = max_gt * (2 if dn_negative else 1)
     dn_groups = max(dn_number // group_size, 1)
+    if per_group_query_budget > 0:
+        dn_groups = min(dn_groups, max(per_group_query_budget // group_size, 1))
     pad_size = group_size * dn_groups
 
     input_query_label = torch.zeros(batch_size, group_detr, pad_size, hidden_dim, device=device, dtype=dtype)
@@ -58,12 +97,14 @@ def prepare_for_cdn(
     neg_indices = []
     tgt_indices = []
     target_offset = 0
-    for batch_idx, target in enumerate(targets):
-        labels = target["labels"].to(device)
-        boxes = target["boxes"].to(device)
+    for batch_idx, (target, selected_indices) in enumerate(
+        zip(targets, selected_target_indices)
+    ):
+        labels = target["labels"].to(device)[selected_indices]
+        boxes = target["boxes"].to(device)[selected_indices]
         num_gt = len(labels)
         if num_gt == 0:
-            target_offset += num_gt
+            target_offset += original_known_num[batch_idx]
             continue
 
         for detr_group_idx in range(group_detr):
@@ -93,7 +134,7 @@ def prepare_for_cdn(
                         dim=1,
                     )
                 )
-                tgt_indices.append(torch.arange(num_gt, device=device) + target_offset)
+                tgt_indices.append(selected_indices + target_offset)
 
                 if dn_negative:
                     neg_out_idx = pos_out_idx + max_gt
@@ -112,7 +153,7 @@ def prepare_for_cdn(
                             dim=1,
                         )
                     )
-        target_offset += num_gt
+        target_offset += original_known_num[batch_idx]
 
     tgt_size = pad_size + num_queries
     attn_mask = torch.zeros(tgt_size, tgt_size, device=device, dtype=torch.bool)
@@ -135,6 +176,13 @@ def prepare_for_cdn(
         "num_dn_group": dn_groups,
         "group_size": group_size,
         "max_gt": max_gt,
+        "original_max_gt": max(original_known_num) if original_known_num else 0,
+        "selected_gt_count": sum(known_num),
+        "original_gt_count": sum(original_known_num),
+        "truncated_gt_count": sum(original_known_num) - sum(known_num),
+        "total_dn_queries": group_detr * pad_size,
+        "dn_total_query_budget": dn_total_query_budget,
+        "per_group_query_budget": per_group_query_budget,
         "group_detr": group_detr,
         "num_queries": num_queries,
         "pos_indices": pos_indices,

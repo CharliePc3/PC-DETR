@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.0.0",
+  "recipe_id": "iclr27-sdsr-v40-freeze-2026-09-06",
+  "source": "ADAPTER_REFINEMENT_HANDOFF_CN.md sections 25.7 and 26",
+  "model": {
+    "encoder": "dinov3_small",
+    "encoder_arch": "dinov3_vits16",
+    "out_feature_indexes": [2, 5, 8, 11],
+    "projector_scale": ["P3", "P4", "P5"],
+    "sdsr_projector_type": "sdsr_v40_p4_learnable",
+    "msp_projector_type": "multiscale",
+    "projector_p5_mode": "full",
+    "sdsr_rank_channels": 64,
+    "sdsr_detail_channels": 32,
+    "sdsr_cross_scale_mode": "none",
+    "sdsr_cross_scale_rank": 32,
+    "sdsr_use_local_reassembly": false,
+    "sdsr_use_directional_guide": false,
+    "sdsr_use_phase_downsample": true,
+    "dec_layers": 4,
+    "num_queries": 300,
+    "num_select": 300,
+    "group_detr": 6,
+    "dec_n_points": 2,
+    "dec_level_n_points": [2, 3, 1],
+    "lite_refpoint_refine": false,
+    "bbox_refine_mode": "shared",
+    "scale_routing": true,
+    "scale_routing_mode": "legacy",
+    "p5_attention_bias": 0.0,
+    "backbone_register_border_tokens": 0,
+    "feature_adapter": "none",
+    "online_refine_mode": "none",
+    "segmentation_head": false
+  },
+  "optimization": {
+    "batch_size": 8,
+    "grad_accum_steps": 2,
+    "world_size": 1,
+    "total_batch_size": 16,
+    "resolution": 640,
+    "lr": 0.00025,
+    "lr_encoder": 0.000125,
+    "weight_decay": 0.0001,
+    "lr_vit_layer_decay": 0.8,
+    "lr_component_decay": 0.7,
+    "multi_scale": true,
+    "expanded_scales": true,
+    "multi_scale_stop_epoch": -1,
+    "augmentation_preset": "default"
+  },
+  "cdn": {
+    "enabled": true,
+    "dn_number": 25,
+    "dn_total_query_budget": 300,
+    "dn_label_noise_scale": 0.5,
+    "dn_box_noise_scale": 0.6,
+    "dn_loss_coef": 0.5
+  },
+  "dense_o2o": {
+    "enabled": true,
+    "mode": "enhanced",
+    "start_epoch": 2,
+    "mosaic_prob": 0.5,
+    "mixup_prob": 0.0,
+    "copyblend_prob": 0.5,
+    "copyblend_area_threshold": 100,
+    "copyblend_num_objects": 1,
+    "copyblend_expand_ratios": [0.1, 0.25]
+  },
+  "ema": {
+    "paper_default": true,
+    "may_disable_for_efficiency_runs": true,
+    "decay": 0.993,
+    "tau": 100
+  },
+  "tracks": {
+    "analysis": {
+      "subset": "medium",
+      "epochs": 24,
+      "lr_drop": 20,
+      "dense_o2o_image_stop_epoch": 12,
+      "dense_o2o_copyblend_stop_epoch": 21
+    },
+    "system": {
+      "subset": "full",
+      "epochs": 30,
+      "lr_drop": 25,
+      "dense_o2o_image_stop_epoch": 15,
+      "dense_o2o_copyblend_stop_epoch": 26
+    }
+  }
+}

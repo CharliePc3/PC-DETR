@@ -147,6 +147,7 @@ class Transformer(nn.Module):
         two_stage=False,
         num_feature_levels=4,
         dec_n_points=4,
+        dec_level_n_points=None,
         lite_refpoint_refine=False,
         decoder_norm_type="LN",
         bbox_reparam=False,
@@ -173,7 +174,11 @@ class Transformer(nn.Module):
             normalize_before,
             group_detr=group_detr,
             num_feature_levels=num_feature_levels,
-            dec_n_points=dec_n_points,
+            dec_n_points=(
+                dec_level_n_points
+                if dec_level_n_points is not None
+                else dec_n_points
+            ),
             skip_self_attn=False,
             scale_routing=scale_routing,
             scale_routing_mode=scale_routing_mode,
@@ -775,6 +780,7 @@ def build_transformer(args):
         two_stage=two_stage,
         num_feature_levels=args.num_feature_levels,
         dec_n_points=args.dec_n_points,
+        dec_level_n_points=getattr(args, "dec_level_n_points", None),
         lite_refpoint_refine=args.lite_refpoint_refine,
         decoder_norm_type=args.decoder_norm,
         bbox_reparam=args.bbox_reparam,

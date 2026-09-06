@@ -127,9 +127,14 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         transforms: Optional[Any],
         include_masks: bool = False,
         remap_category_ids: bool = False,
+        late_transforms: Optional[Any] = None,
+        transform_switch_epoch: int = -1,
     ) -> None:
         super(CocoDetection, self).__init__(img_folder, ann_file)
         self._transforms = transforms
+        self._late_transforms = late_transforms
+        self.transform_switch_epoch = int(transform_switch_epoch)
+        self.current_epoch = 0
         self.include_masks = include_masks
         if remap_category_ids:
             # Mapping from original COCO category_id to contiguous label indices
@@ -143,13 +148,22 @@ class CocoDetection(torchvision.datasets.CocoDetection):
             self.label2cat = None
         self.prepare = ConvertCoco(include_masks=include_masks, cat2label=self.cat2label)
 
+    def set_epoch(self, epoch: int) -> None:
+        self.current_epoch = int(epoch)
+
     def __getitem__(self, idx: int) -> Tuple[Any, Any]:
         img, target = super(CocoDetection, self).__getitem__(idx)
         image_id = self.ids[idx]
         target = {"image_id": image_id, "annotations": target}
         img, target = self.prepare(img, target)
-        if self._transforms is not None:
-            img, target = self._transforms(
+        transforms = self._transforms
+        if (
+            self._late_transforms is not None
+            and self.current_epoch >= self.transform_switch_epoch
+        ):
+            transforms = self._late_transforms
+        if transforms is not None:
+            img, target = transforms(
                 img, target
             )  # boxes are absolute [x_min, y_min, x_max, y_max]; conversion to normalized [cx, cy, w, h] occurs inside Normalize
         return img, target
@@ -502,40 +516,51 @@ def build_coco(image_set: str, args: Any, resolution: int) -> CocoDetection:
     include_masks = getattr(args, "segmentation_head", False)
     aug_config = getattr(args, "aug_config", None)
 
+    transform_builder = (
+        make_coco_transforms_square_div_64
+        if square_resize_div_64
+        else make_coco_transforms
+    )
     if square_resize_div_64:
         logger.info(f"Building COCO {image_set} dataset with square resize at resolution {resolution}")
-        dataset = CocoDetection(
-            img_folder,
-            ann_file,
-            transforms=make_coco_transforms_square_div_64(
-                image_set,
-                resolution,
-                multi_scale=args.multi_scale,
-                expanded_scales=args.expanded_scales,
-                skip_random_resize=not args.do_random_resize_via_padding,
-                patch_size=args.patch_size,
-                num_windows=args.num_windows,
-                aug_config=aug_config,
-            ),
-            include_masks=include_masks,
-        )
     else:
         logger.info(f"Building COCO {image_set} dataset at resolution {resolution}")
-        dataset = CocoDetection(
-            img_folder,
-            ann_file,
-            transforms=make_coco_transforms(
-                image_set,
-                resolution,
-                multi_scale=args.multi_scale,
-                expanded_scales=args.expanded_scales,
-                skip_random_resize=not args.do_random_resize_via_padding,
-                patch_size=args.patch_size,
-                num_windows=args.num_windows,
-                aug_config=aug_config,
-            ),
-            include_masks=include_masks,
+    transforms = transform_builder(
+        image_set,
+        resolution,
+        multi_scale=args.multi_scale,
+        expanded_scales=args.expanded_scales,
+        skip_random_resize=not args.do_random_resize_via_padding,
+        patch_size=args.patch_size,
+        num_windows=args.num_windows,
+        aug_config=aug_config,
+    )
+    switch_epoch = getattr(args, "multi_scale_stop_epoch", -1)
+    late_transforms = None
+    if image_set == "train" and args.multi_scale and switch_epoch >= 0:
+        late_transforms = transform_builder(
+            image_set,
+            resolution,
+            multi_scale=False,
+            expanded_scales=False,
+            skip_random_resize=False,
+            patch_size=args.patch_size,
+            num_windows=args.num_windows,
+            aug_config=aug_config,
         )
+        logger.info(
+            "Random multi-scale resizing will stop at epoch %d; base resolution=%d",
+            switch_epoch,
+            resolution,
+        )
+    dataset = CocoDetection(
+        img_folder,
+        ann_file,
+        transforms=transforms,
+        include_masks=include_masks,
+        late_transforms=late_transforms,
+        transform_switch_epoch=switch_epoch,
+    )
     return dataset
 
 

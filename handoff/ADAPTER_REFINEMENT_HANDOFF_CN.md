@@ -1,10 +1,10 @@
 # RF-DETR-DINOv3 全会话工作与贡献交接文档
 
-> 更新时间：2026-08-31（Asia/Shanghai）
+> 更新时间：2026-09-06（Asia/Shanghai）
 > 项目：`/data/cpc/root/project/RF-DETR-DINOv3`
 > 当前分支：`exp/scale-decoupled-projector`
-> 写入时 HEAD：`4aec8c0c21a2c2ea9f6e3b8e2c999477729a8783`
-> 文档定位：从项目架构梳理、CDN/Group、Backbone refinement 到 SDSR-v1-v46、匹配策略整合和 COCO Full 的完整会话交接
+> 写入时 HEAD：`a7a46bd4a160f496dd04ff5c75288d3f131ec27a`（另有未提交实验代码）
+> 文档定位：从项目架构梳理、CDN/Group、Backbone refinement 到 SDSR-v1-v46、Reg0 参数重搜、DEIMv2 风格迁移和原始 MSP 严格对照的完整会话交接
 
 ## 1. 文档用途和权威边界
 
@@ -53,8 +53,20 @@ v37-v46 中回到 v40，以及哪些结果受到共享工作树和另一会话�
 11. 在 v40 上联合搜索 Dense O2O、Group 和 CDN。历史 Reg1 配置达到 `36.9718 AP`，
     但发现它误保留 `backbone_register_border_tokens=1`；严格关闭后可信结果为
     `36.4706 AP`。
-12. 当前有效 Full COCO 使用 Reg0、SDSR-v40、Dense no-MixUp、Group6、CDN25、
-    total batch16、24e、lr_drop20，不使用 EMA。
+12. 为解决 Dense O2O 提高 GT density 后 CDN query 随 `max_gt * group_detr` 膨胀的
+    问题，实现了 group-aware bounded CDN。它按面积分层保留 GT，并用总 query budget
+    同时约束每组 DN 数量和总训练显存。
+13. 在 Reg0 下重新搜索 Group、DN、budget 和增强。原 recipe 的局部最优为
+    `Group5 + DN50 + budget300 = 36.9112 AP`，但该最优点不能直接与后续 Decoder
+    策略叠加。
+14. DEIMv2 风格迁移中，Decoder 按尺度采样点 `P3/P4/P5=2/3/1` 达到
+    `37.0258 AP`。名为 AUG1 的实验虽传入 `multi_scale_stop_epoch=21`，但当时只切换了
+    dataset transform，engine 的 batch-level random resize 仍持续到训练结束，因此
+    `36.9754 AP` 不能归因于“末期固定 640”，也不能据此判断它与 Decoder 策略的交互。
+15. 当前实用最佳组合为 Reg0、SDSR-v40、Dense no-MixUp、Group6、DN25、
+    budget300、Decoder `2/3/1` 和全程随机多尺度。独立 EMA 复跑中的 raw/EMA
+    均约 `37.023 AP`；严格对齐的原始 P3/P4/P5 MultiScaleProjector 为
+    `36.942/36.938 AP`。EMA 没有可测增益，因此不是效率优先时的必要默认项。
 
 最重要的结论不是“新模块越复杂越好”，而是：
 
@@ -1015,6 +1027,10 @@ Projector 前裁掉。因为最终路线没有采用 inference-time register，�
 
 ## 19. 当前有效 Full COCO 运行
 
+> 历史状态说明：本节保留 2026-08-31 时已经启动的 Full run，便于追溯；后续 Medium
+> 重搜得到的最新推荐 recipe 和最终 MSP 对照见第25节。不要再把本节配置视作当前
+> 唯一最佳配置。
+
 运行名：
 
 ```text
@@ -1177,8 +1193,8 @@ output/coco_full_s43_detinit1043_sdsr_v40_dense_nomix_g6_cdn25_l05_reg0_lrd20_e2
 ### 21.3 仍待验证
 
 1. 当前 Reg0 Full COCO 的最终 AP 和尺度分解；
-2. Reg0 seed42 medium，评估 `36.4706` 的方差；
-3. Reg0 下邻近 CDN25/CDN50/no-CDN 与 Group4/6 是否保持排序；
+2. seed44 下当前最佳 SDSR 与原始 P3/P4/P5 MSP 的 paired delta；
+3. `G6/DN25/budget300 + DEC+AUG + photometric` 是否超过 default；
 4. SDSR-v40 的标准 TensorRT/ONNX latency，而非只看 eager PyTorch；
 5. 在更大 DINOv3 backbone 上 UniRefiner 是否比 small 更有价值；
 6. 未来接入实例/语义分割时，SDSR 的 P3 边界和 refinement 是否产生新收益。
@@ -1202,6 +1218,9 @@ SEGMENTATION_ARCHITECTURES_AND_INSID3_COCO.md
 stage，不要用破坏性命令清理整个工作树。
 
 ## 23. 给下一会话的推荐顺序
+
+> 本节原始顺序对应 2026-08-31 状态；第25.8节给出了完成 Reg0 重搜和 MSP 对照后的
+> 最新顺序，执行时以后者为准。
 
 ### P0：完成当前 Full
 
@@ -1232,7 +1251,7 @@ stage，不要用破坏性命令清理整个工作树。
 3. 若继续 backbone，优先验证更大 DINOv3 或 detection-aware dense objective；
 4. 若接分割，重新建立任务内 baseline，不从 detection AP 直接推断。
 
-## 24. 最终可引用的阶段结论
+## 24. 最终可引用的阶段结论（截至 2026-08-31）
 
 SDSR 的完整故事不是“完全替换 MultiScaleProjector 后一次成功”，而是：
 
@@ -1243,9 +1262,409 @@ SDSR 的完整故事不是“完全替换 MultiScaleProjector 后一次成功”
 > 与 deepest grouped detail 的成熟骨架。v23 达到 36.059 AP，v36 可等价转换并减少
 > 11.9% 总参数。后续 v37-v46 进一步确认 P4 可学习深度先验比复杂动态路由和替换 C2f
 > 更有效，最终选定 SDSR-v40。关闭遗留 register border 后，SDSR-v40 与 Dense
-> no-MixUp、Group6、CDN25 的可信 Medium 结果为 36.4706 AP；当前正以完全相同的
-> Reg0 原则进行 Full COCO 验证。
+> no-MixUp、Group6、CDN25 的第一版干净 Medium 结果为 36.4706 AP。此处是当时的
+> 阶段结论；后续 bounded CDN、Decoder `2/3/1` 和末期尺度逻辑修正见第25节。
 
 这也是本会话与其他 handoff 最需要区分的贡献：不仅记录最终 v40，还保留了 SDSR 从
 极轻完整替换失败，到以尺度职责解耦为核心、恢复必要融合容量并达到可用精度/效率平衡的
 完整演化过程。
+
+## 25. 2026-09-01 至 2026-09-04：Reg0 重搜、DEIMv2 风格迁移与 MSP 严格对照
+
+本节记录第 17-24 节之后完成的新一轮优化，结论优先级高于前文中“当前”“最终”一类
+阶段性表述。所有主要结果均为 COCO Medium、24 epoch、seed43、
+`detector_init_seed=1043`；表内 AP 已按论文写法乘以 100。
+
+### 25.1 新增实现
+
+#### Group-aware bounded CDN
+
+Dense O2O 的 Mosaic/CopyBlend 会提高单图 GT density。原 CDN 的训练 query 数近似随
+`group_detr * max_gt * positive_negative_pairs * dn_groups` 增长，容易被 batch 中最密集
+图像放大。新增：
+
+```text
+--dn-total-query-budget N
+```
+
+实现位于：
+
+```text
+src/rfdetr/models/dn_components.py
+src/rfdetr/models/lwdetr.py
+src/rfdetr/config.py
+src/rfdetr/main.py
+run_coco_subset.py
+```
+
+具体行为：
+
+1. `N=0` 保持旧版无上限逻辑；
+2. 先按 `group_detr` 分配每组 budget，再按正/负 pair 计算可保留的最大 GT 数；
+3. GT 超限时不是简单取前 K 个，而是按 box area 排序后均匀采样，尽量同时保留
+   small/medium/large 目标；
+4. `dn_groups` 继续受 `dn_number` 约束，同时不能突破总 budget；
+5. 日志新增 `cdn_original_max_gt`、`cdn_max_gt`、`cdn_truncated_gt_count`、
+   `cdn_pad_size` 和 `cdn_total_dn_queries`；
+6. inference 完全不构造 CDN query，因此该限制只影响训练。
+
+对应测试：
+
+```text
+tests/test_cdn_query_budget.py
+```
+
+#### 末期固定输入尺度及实现纠正
+
+新增：
+
+```text
+--multi-scale-stop-epoch 21
+```
+
+原设计意图是在 24e recipe 中让 epoch 0-20 使用 multi-scale/expanded-scales，epoch
+21-23 切换到 base resolution 640。最初实现只在 `src/rfdetr/datasets/coco.py` 切换了
+dataset transform，却遗漏了 `src/rfdetr/engine.py` 中每个 batch 执行的随机插值，因此
+所有早期带该参数的实验实际上仍是全程随机多尺度。
+
+现已通过统一的 `is_multi_scale_training_active()` 同时控制 dataset 和 engine，并增加
+`tests/test_multi_scale_stop.py`。修复后的严格对照达到 `36.7700 AP`；历史最佳的
+bug-compatible run 为 `37.0233 AP`。不过两条训练轨迹在 epoch21 前已相差约 `0.22 AP`，
+切换后的 difference-in-differences 约为 `-0.04 AP`，因此证据只支持“末期固定 640
+无明显收益或略负”，不能把约 `0.25 AP` 的终值差全部解释为尺度切换。
+
+#### Decoder 每尺度采样点
+
+新增：
+
+```text
+--dec-level-n-points 2 3 1
+```
+
+原 `dec_n_points=2` 表示 P3/P4/P5 每尺度均为2个采样点；新实现允许每尺度不同：
+
+```text
+P3 = 2
+P4 = 3
+P5 = 1
+```
+
+P4 是 DINOv3 原生 stride16 的语义锚点，增加一个采样位置；P5 空间分辨率低且冗余度
+较高，减少一个采样位置。参数张量按实际总点数构造，不是先生成最大点数再无效计算。
+
+实现位于：
+
+```text
+src/rfdetr/models/transformer.py
+src/rfdetr/models/ops/modules/ms_deform_attn.py
+```
+
+对应测试：
+
+```text
+tests/test_ms_deform_attn_level_points.py
+```
+
+测试确认标量 `2` 与 tuple `[2,2,2]` 的参数、前向和梯度保持 bitwise 一致，`[2,3,1]`
+前向/反向有限且维度正确。
+
+### 25.2 Reg0 参数重搜
+
+冻结快照下固定 SDSR-v40、Dense O2O no-MixUp、24e，搜索 Group、DN、budget 和增强：
+
+| 配置 | AP | Last-5 AP | Peak memory |
+|---|---:|---:|---:|
+| G5, budget300, DN50, loss0.5 | **36.9112** | 36.1597 | 12,202 MiB |
+| G5, budget300, DN25, loss0.3 | 36.8099 | **36.3372** | 12,173 MiB |
+| G6, budget300, DN25, loss0.5 | 36.7719 | 36.2687 | 13,265 MiB |
+| G5, budget300, DN25, loss0.5 + photometric | 36.7399 | 36.1225 | 12,232 MiB |
+| G5, budget300, DN25, loss0.5 + MixUp0.15 | 36.6877 | 36.2125 | 13,018 MiB |
+| G5, budget300, DN25, loss0.5 + CopyBlend0.75 | 36.5933 | 35.9679 | 12,175 MiB |
+| photometric + MixUp0.15 | 36.5741 | 36.0813 | 13,215 MiB |
+| CopyBlend objects=2 | 36.3614 | 36.0306 | 12,346 MiB |
+| budget360 | 36.3189 | 35.8592 | 12,424 MiB |
+| Mosaic0.35 | 36.3068 | 35.8094 | 12,180 MiB |
+| budget240 | 36.2235 | 35.8664 | 12,061 MiB |
+| G5, budget300, DN25, loss0.5 default | 35.9666 | 35.4150 | 12,196 MiB |
+
+结论：
+
+- budget300 是当前密度和 Group 数下较合理的中点；240/360 均下降；
+- Reg0 原 recipe 的峰值局部最优是 G5/DN50/loss0.5，但 Last-5 不强；
+- MixUp、加大 CopyBlend 概率、每图复制2个目标和降低 Mosaic 均不保留；
+- photometric 有小幅潜力，但不是无条件增益；
+- Group5 确实比 Group6 省约 1 GiB，但其最优性依赖 Decoder/CDN 组合，不能固定外推。
+
+### 25.3 DEIMv2 风格迁移队列
+
+该队列的冻结快照不包含 bounded CDN，使用旧版 unbounded CDN。每次只改变一个因素：
+
+| 实验 | 改动 | AP | Last-5 AP | 相对 C0 |
+|---|---|---:|---:|---:|
+| DEC1 | Decoder P3/P4/P5 points=`2/3/1` | **37.0258** | **36.4500** | +0.5552 |
+| AUG1 | 意图为 epoch21 后固定640，但旧 engine 随机缩放仍生效 | 36.9754 | 36.3009 | +0.5049 |
+| C1 | 定制 MSP source prune/P5 group2 | 36.7442 | 36.0930 | +0.2736 |
+| LR1 | warmup steps=85 | 36.6898 | 36.0474 | +0.2192 |
+| MATCH1 | epoch18 切 DEIM matcher, IoU power4 | 36.5344 | 36.1007 | +0.0638 |
+| C0 | 复用 SDSR-v40 基线 | 36.4706 | 36.1493 | 0 |
+| LR2 | flat-cosine | 36.4616 | 36.0069 | -0.0090 |
+
+注意 C1 是定制化 MultiScaleProjector，不是原始 RF-DETR P3/P4/P5 MSP，不能作为最终
+Projector 公平对照。真正的原始 MSP 对照见 25.6。
+
+### 25.4 首轮联合搜索
+
+为避免共享工作树继续变化，建立：
+
+```text
+experiment_snapshots/sdsr_joint_search_v1
+```
+
+所有候选共同传入以下参数。需要注意，旧版 `multi_scale_stop_epoch=21` 未关闭 engine
+随机缩放，所以这些 run 的实际行为是全程随机多尺度：
+
+```text
+projector=sdsr_v40_p4_learnable
+P3/P4/P5
+DEC points=2/3/1
+multi_scale_stop_epoch=21
+DN budget=300
+Dense O2O enhanced, Mosaic/CopyBlend=0.5/0.5, MixUp=0
+register_border_tokens=0
+```
+
+结果：
+
+| 配置 | AP | Last-5 AP |
+|---|---:|---:|
+| G6, DN25, loss0.5, default | **36.8916** | 36.2656 |
+| G6, DN50, loss0.5, photometric | 36.8307 | **36.2907** |
+| G6, DN50, loss0.5, default | 36.6588 | 36.0884 |
+| G5, DN50, loss0.5, default | 36.4995 | 36.0949 |
+| G6, DN25, loss0.3, default | 36.4558 | 35.9899 |
+
+组合后最优点从 Reg0 搜索中的 G5/DN50 转移到 G6/DN25，说明 Group/DN 超参数与
+Decoder sampling 和完整训练 recipe 存在交互；由于末期尺度当时没有真正切换，不能把
+它列入该因果判断。CopyBlend objects=2 因源实验低于 36.80 门槛而没有重复。
+
+### 25.5 五单元交互拆解
+
+为区分 DEC1、AUG1 和 bounded CDN，补充：
+
+| 实验 | 配置 | AP | Last-5 AP |
+|---|---|---:|---:|
+| C1 | G6/DN25/unbounded + DEC+AUG | 36.8138 | 36.1366 |
+| C2 | G6/DN25/budget300 + DEC | 36.7368 | 36.2253 |
+| C3 | G6/DN25/budget300 + AUG | 36.6685 | **36.2569** |
+| C4 | G5/DN50/budget300 + DEC | 36.4546 | 35.9524 |
+| C5 | G5/DN50/budget300 + AUG | 36.4150 | 35.9346 |
+
+主要因果判断：
+
+1. unbounded 下 DEC-only=37.0258；所谓 AUG-only=36.9754 和 DEC+AUG=36.8138 均未
+   真正施加末期固定尺度，因此不能用于证明 DEC 与固定尺度存在非加性；
+2. G5/DN50/budget300 原始峰值为36.9112，加入 DEC 后下降约0.46 AP；带 AUG 标签的
+   run 只代表另一条全程随机多尺度训练轨迹，不能作为固定尺度消融；
+3. G6/DN25/budget300 下，DEC 单独为36.7368，最终联合配置第一次为36.8916、独立
+   复跑为37.0233。它支持 bounded CDN、Decoder `2/3/1` 和完整训练 recipe 的联合候选，
+   但不能把其中任何收益归因于末期固定尺度；
+4. 完全相同联合配置的两次 raw AP 为36.8916和37.0233，单次运行波动达到0.1317 AP。
+   小于约0.15 AP 的差距不能仅靠一次 medium run 宣称稳定收益。
+
+### 25.6 最佳 SDSR 与原始 P3/P4/P5 MSP 的严格对照
+
+联合队列选择 G6/DN25/loss0.5/budget300 后，先独立复跑 SDSR 并启用 EMA，再按完全
+相同 recipe 串行运行原始 RF-DETR MultiScaleProjector。两者共同配置：
+
+```text
+24 epochs, batch8, grad_accum2, total batch16
+resolution640, multi-scale + expanded-scales throughout training
+P3/P4/P5, decoder points=2/3/1
+Group6, DN25, loss0.5, budget300
+Dense O2O enhanced, image[2,12), CopyBlend[2,21)
+Mosaic/MixUp/CopyBlend=0.5/0/0.5, objects=1
+EMA decay=0.993, tau=100
+seed43, detector_init_seed1043, register border=0
+```
+
+唯一主要变量：
+
+```text
+SDSR: sdsr_v40_p4_learnable
+MSP:  multiscale, full hidden-layer sources, C2f=3/3/3, full P5
+```
+
+结果：
+
+| 指标 | SDSR | 原始 MSP | SDSR - MSP |
+|---|---:|---:|---:|
+| Raw AP | **37.0233** | 36.9422 | **+0.0810** |
+| EMA AP | **37.0227** | 36.9382 | **+0.0845** |
+| Raw AP50 | 53.9205 | 53.6264 | +0.2941 |
+| Raw AP75 | 39.6858 | 39.2399 | +0.4459 |
+| Raw APS | 18.5376 | 18.0474 | +0.4903 |
+| Raw APM | 40.5745 | 40.2748 | +0.2998 |
+| Raw APL | 54.8932 | 54.6581 | +0.2351 |
+| Raw Last-5 AP | 36.4223 | 36.3576 | +0.0647 |
+| EMA Last-5 AP | 36.7472 | 36.5877 | +0.1595 |
+| Trainable parameters | **35.76M** | 40.57M | **-4.82M (-11.9%)** |
+| Peak train memory | 13,698 MiB | **13,378 MiB** | +320 MiB |
+| Sampled iteration time | 0.7595 s | **0.7513 s** | about 1.1% slower |
+| Total training time | 2.54 h | **2.52 h** | about 0.7% slower |
+
+可信结论：
+
+- SDSR 在可训练参数减少11.9%的条件下，与原始 MSP 性能持平并单次领先约0.08 AP；
+- AP50、AP75 和所有尺度 AP 的方向均为正，不是仅一个 COCO 子指标异常；
+- SDSR 暂未取得 eager PyTorch 训练速度或显存优势，不能把“参数更少”写成“实测更快”；
+- 320 MiB 显存差距很小，可能同时受 activation topology 和 allocator 波动影响；
+- `+0.08 AP` 小于同配置 SDSR 两次运行的0.13 AP波动，尚不足以声称统计稳定地超过
+  MSP，需要至少补一个 paired seed。
+
+### 25.7 当前推荐配置
+
+综合峰值、参数量和 bounded CDN 的显存控制，当前实用默认值为：
+
+```text
+projector_type=sdsr_v40_p4_learnable
+projector_scale=P3 P4 P5
+sdsr_rank_channels=64
+sdsr_cross_scale_mode=none
+sdsr_use_local_reassembly=False
+sdsr_use_directional_guide=False
+sdsr_use_phase_downsample=True
+
+group_detr=6
+dec_n_points=2
+dec_level_n_points=2 3 1
+bbox_refine_mode=shared
+scale_routing=True
+scale_routing_mode=legacy
+
+use_cdn=True
+dn_number=25
+dn_label_noise_scale=0.5
+dn_box_noise_scale=0.6
+dn_loss_coef=0.5
+dn_total_query_budget=300
+
+multi_scale=True
+expanded_scales=True
+multi_scale_stop_epoch=-1  # 全程随机多尺度；这是历史 37.0233 run 的实际行为
+
+use_dense_o2o=True
+dense_o2o_mode=enhanced
+dense_o2o_start_epoch=2
+dense_o2o_image_stop_epoch=12
+dense_o2o_copyblend_stop_epoch=21
+mosaic/mixup/copyblend=0.5/0/0.5
+copyblend_num_objects=1
+
+use_ema=True
+backbone_register_border_tokens=0
+
+# 2026-09-06 Medium LR 重搜后的推荐优化器参数
+lr=2.5e-4
+lr_encoder=1.25e-4
+lr_drop=20
+```
+
+DEC-only unbounded 的单次 AP 为37.0258，与该组合版37.0233事实上相同；组合版的主要
+实用意义不是已经证明额外涨点，而是在相同峰值附近通过 budget 控制 CDN memory，并
+获得一个可直接与 MSP 对齐的统一 recipe。
+
+最终 MSP 对照为了同时报告 raw/EMA 使用了 `EMA decay=0.993, tau=100`，但 EMA 相对
+同一次 SDSR raw 低0.0006 AP、相对 MSP raw 低0.0040 AP，属于完全持平。Full COCO
+效率优先配置可关闭 EMA；若为了和本节表格保持完全相同的评测协议，也可以保留并同时
+报告 raw 与 EMA，不能把 EMA 本身计作增益。
+
+### 25.8 关键产物与下一步
+
+```text
+# Reg0 参数搜索
+run_sdsr_v40_reg0_cdn_budget_search_gpu1.sh
+output/sdsr_deim_transfer_medium_v1/combined_search_summary.csv
+
+# DEIMv2 风格迁移
+run_sdsr_deim_transfer_medium_gpu1.sh
+output/sdsr_deim_transfer_medium_v1/summary.tsv
+
+# 联合搜索与最终 MSP 对照
+run_sdsr_joint_search_then_msp_gpu1.sh
+experiment_snapshots/sdsr_joint_search_v1/
+output/sdsr_joint_search_v1/joint_summary.tsv
+output/sdsr_joint_search_v1/final_pair.tsv
+
+# 五单元交互拆解
+run_sdsr_joint_factorial_followup_gpu1.sh
+output/sdsr_joint_factorial_followup_v1/summary.tsv
+
+# 结果汇总工具
+tools/summarize_sdsr_searches.py
+```
+
+推荐后续顺序：
+
+1. 用 seed44 对当前最佳 SDSR 与原始 P3/P4/P5 MSP 做成对复测，报告两 seed
+   mean/std 和 paired delta；
+2. 若继续挖掘 medium 上限，只补一个全程随机多尺度的
+   `G6/DN25/budget300 + DEC + photometric` 邻近点，不再展开大规模增强搜索；
+3. seed44 仍为正后，再用当前推荐 recipe 启动 Full COCO；当前证据建议保持全程随机
+   多尺度，即 `multi_scale_stop_epoch=-1`。若改变总 epoch，需重新设计 `lr_drop` 和
+   Dense O2O/CopyBlend 的阶段边界；
+4. 若论文主张效率，补 batch1 inference latency、FLOPs、ONNX/TensorRT；当前训练日志
+   只能支持“参数更少”，不能支持“运行更快”；
+5. 提交代码时将 bounded CDN、per-level decoder points、late fixed-scale 修复、测试和实验
+   脚本按主题分开 stage，避免把其他会话的未提交改动混入。
+
+## 26. SDSR-v40 Medium 学习率重搜（2026-09-06）
+
+### 26.1 实验协议
+
+所有实验复用 `experiment_snapshots/sdsr_joint_search_v1`，固定 seed43、detector-init-seed1043、
+24e、total batch16、Group6、bounded CDN DN25/budget300、Dense O2O enhanced、Decoder
+per-level points `2/3/1`、Reg0、SDSR-v40 和全程随机多尺度。除了表中 LR/drop 外没有改变
+模型或数据配置。
+
+| ID | Detector LR | Encoder LR | Drop | AP | AP50 | AP75 | APS | APM | APL | Last-5 AP |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 1.0e-4 | 1.5e-4 | 20 | 37.0233 | 53.9205 | 39.6858 | 18.5376 | 40.5745 | 54.8932 | 36.4223 |
+| B | 1.5e-4 | 1.0e-4 | 20 | 37.5972 | 54.8011 | 39.4476 | 19.9223 | 41.3603 | 56.0798 | 37.0642 |
+| C | 2.0e-4 | 1.0e-4 | 20 | 38.2727 | 55.6621 | 40.7194 | 19.6084 | 41.7403 | 57.9870 | 37.6792 |
+| D | 2.5e-4 | 1.0e-4 | 20 | 38.6196 | 56.0726 | 41.4059 | **20.5723** | 42.1527 | 58.1364 | 37.8856 |
+| E | 2.0e-4 | 0.75e-4 | 20 | 38.0551 | 55.5617 | 40.6640 | 19.1343 | 41.5264 | 58.5446 | 37.5373 |
+| F | 2.0e-4 | 1.0e-4 | 18 | 38.2048 | 55.4392 | 41.0421 | 19.6120 | 41.7290 | 57.4532 | 37.9786 |
+| G | 3.0e-4 | 1.0e-4 | 20 | 38.7056 | 56.2724 | 41.4082 | 19.7948 | 41.8084 | **59.6452** | 37.9976 |
+| **H** | **2.5e-4** | **1.25e-4** | **20** | **38.8148** | **56.3150** | **41.5186** | 20.3596 | **42.7799** | 58.0889 | **38.0865** |
+
+### 26.2 结论
+
+1. H 是当前 seed43 Medium 峰值，相对 D 提升0.1952 AP、Last-5 提升0.2009 AP；相对最初
+   A 提升1.7915 AP。提高 encoder LR 到1.25e-4 的收益同时体现在 AP50、AP75 和 APM。
+2. Detector LR 从2.5e-4继续提高到3e-4只增加0.0861 AP，APS 下降0.7775，且 epoch18
+   出现34.6051 AP 的较大波动；3e-4更像 LR 上沿而非稳健默认值。
+3. 降低 encoder LR 到0.75e-4会降低 AP 和 Last-5，说明当前检测结构需要 backbone 对
+   SDSR/Dense O2O 的特征分布进行充分适配。
+4. Drop18 没有提高最终上限。它的 Last-5 窗口全部位于低 LR 阶段，不能直接与包含一个
+   高 LR epoch 的 Drop20 Last-5 比较；两者 epoch20-23 平均 AP 几乎相同。
+5. H 相对 D 的增量大于历史完全同配置约0.13 AP波动，但仍属于 Medium 单 seed 选择结果。
+   Full 配对实验必须让 SDSR/MSP 使用同一 H recipe，不能把 H 的 LR 收益算作 SDSR 独有增益。
+
+关键产物：
+
+```text
+run_sdsr_medium_lr_screen_gpu1.sh
+run_sdsr_medium_lr_refine_screen_gpu1.sh
+run_sdsr_medium_lr_refine_screen_v3_gpu1.sh
+output/sdsr_v40_medium_lr_screen_v1/
+output/sdsr_v40_medium_lr_refine_screen_v2/
+output/sdsr_v40_medium_lr_refine_screen_v3/
+```
+
+### 26.3 新 Full COCO 配对协议
+
+新 Full 实验使用 H 的 LR，并将 24e 阶段边界按1.25倍映射到30e：`lr_drop=25`、
+`dense_o2o_image_stop_epoch=15`、`dense_o2o_copyblend_stop_epoch=26`。两组均启用 EMA
+（decay0.993、tau100）并同时报告 raw/EMA；保持 `multi_scale_stop_epoch=-1`。SDSR 与
+MSP 的唯一模型差异是 projector：SDSR 使用 `sdsr_v40_p4_learnable`，MSP 使用原始
+`multiscale` P3/P4/P5 full-P5 配置。

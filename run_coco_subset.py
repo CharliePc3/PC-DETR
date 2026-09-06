@@ -448,6 +448,11 @@ def make_output_dir(args):
             [
                 "cdn",
                 f"dn{args.dn_number}",
+                *(
+                    [f"dnbudget{args.dn_total_query_budget}"]
+                    if args.dn_total_query_budget > 0
+                    else []
+                ),
                 f"box{args.dn_box_noise_scale:g}",
                 f"lbl{args.dn_label_noise_scale:g}",
                 f"loss{args.dn_loss_coef:g}",
@@ -551,6 +556,7 @@ def parse_args():
     parser.add_argument("--run-test", action="store_true")
     parser.add_argument("--multi-scale", action="store_true")
     parser.add_argument("--expanded-scales", action="store_true")
+    parser.add_argument("--multi-scale-stop-epoch", type=int, default=-1)
     parser.add_argument("--aug-preset", default="default", choices=tuple(AUG_PRESETS))
     parser.add_argument("--resolution", type=int, default=640)
     parser.add_argument("--dec-layers", type=int, default=4)
@@ -558,6 +564,13 @@ def parse_args():
     parser.add_argument("--num-select", type=int, default=300)
     parser.add_argument("--group-detr", type=int, default=13)
     parser.add_argument("--dec-n-points", type=int, default=2)
+    parser.add_argument(
+        "--dec-level-n-points",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Per-level deformable sampling points, ordered like projector-scale.",
+    )
     parser.add_argument(
         "--lite-refpoint-refine",
         action=argparse.BooleanOptionalAction,
@@ -861,6 +874,12 @@ def parse_args():
     parser.add_argument("--mask-dice-loss-coef", type=float, default=5.0)
     parser.add_argument("--use-cdn", action="store_true")
     parser.add_argument("--dn-number", type=int, default=50)
+    parser.add_argument(
+        "--dn-total-query-budget",
+        type=int,
+        default=0,
+        help="Maximum DN queries across all DETR groups; 0 preserves legacy behavior.",
+    )
     parser.add_argument("--dn-label-noise-scale", type=float, default=0.5)
     parser.add_argument("--dn-box-noise-scale", type=float, default=0.6)
     parser.add_argument("--no-dn-negative", dest="dn_negative", action="store_false")
@@ -1309,6 +1328,15 @@ def main():
             raise ValueError(
                 "Dense O2O CopyBlend expansion ratios must be non-negative and increasing."
             )
+    if args.dn_total_query_budget < 0:
+        raise ValueError("dn_total_query_budget must be non-negative.")
+    if args.use_cdn and 0 < args.dn_total_query_budget < args.group_detr * 2:
+        raise ValueError(
+            "dn_total_query_budget must allow at least one positive/negative pair "
+            "per DETR group."
+        )
+    if args.multi_scale_stop_epoch >= effective_epochs:
+        raise ValueError("--multi-scale-stop-epoch must be smaller than total epochs.")
     if args.segmentation_head:
         if args.use_cdn:
             raise ValueError(
@@ -1370,6 +1398,13 @@ def main():
             raise ValueError(
                 f"--scale-routing-layers must be in [0, {args.dec_layers - 1}]."
             )
+    if args.dec_level_n_points is not None:
+        if len(args.dec_level_n_points) != len(args.projector_scale):
+            raise ValueError(
+                "--dec-level-n-points must contain one value per projector scale."
+            )
+        if any(value <= 0 for value in args.dec_level_n_points):
+            raise ValueError("Decoder per-level point counts must be positive.")
     setup_distributed_device(args.device)
     set_seed(args.seed)
 
@@ -1411,6 +1446,7 @@ def main():
         num_select=args.num_select,
         group_detr=args.group_detr,
         dec_n_points=args.dec_n_points,
+        dec_level_n_points=args.dec_level_n_points,
         lite_refpoint_refine=args.lite_refpoint_refine,
         bbox_refine_mode=args.bbox_refine_mode,
         query_init=args.query_init,
@@ -1439,6 +1475,7 @@ def main():
         positional_encoding_size=args.resolution // 16,
         use_cdn=args.use_cdn,
         dn_number=args.dn_number,
+        dn_total_query_budget=args.dn_total_query_budget,
         dn_label_noise_scale=args.dn_label_noise_scale,
         dn_box_noise_scale=args.dn_box_noise_scale,
         dn_negative=args.dn_negative,
@@ -1473,6 +1510,7 @@ def main():
     log_main(f"num_select={args.num_select}")
     log_main(f"group_detr={args.group_detr}")
     log_main(f"dec_n_points={args.dec_n_points}")
+    log_main(f"dec_level_n_points={args.dec_level_n_points}")
     log_main(f"lite_refpoint_refine={args.lite_refpoint_refine}")
     log_main(f"bbox_refine_mode={args.bbox_refine_mode}")
     log_main(f"query_init={args.query_init}")
@@ -1528,6 +1566,7 @@ def main():
     log_main(f"online_refine_min_box_tokens={args.online_refine_min_box_tokens}")
     log_main(f"multi_scale={args.multi_scale}")
     log_main(f"expanded_scales={args.expanded_scales}")
+    log_main(f"multi_scale_stop_epoch={args.multi_scale_stop_epoch}")
     log_main(f"square_resize_div_64={args.square_resize_div_64}")
     log_main(f"aug_preset={args.aug_preset}")
     log_main(f"use_ema={args.use_ema}")
@@ -1544,6 +1583,7 @@ def main():
     log_main(f"mask_dice_loss_coef={args.mask_dice_loss_coef}")
     log_main(f"use_cdn={args.use_cdn}")
     log_main(f"dn_number={args.dn_number}")
+    log_main(f"dn_total_query_budget={args.dn_total_query_budget}")
     log_main(f"dn_negative={args.dn_negative}")
     log_main(f"use_budgeted_sa={args.use_budgeted_sa}")
     log_main(f"sa_epoch_window=[{args.sa_start_epoch}, {args.sa_stop_epoch})")
@@ -1604,6 +1644,7 @@ def main():
         num_select=args.num_select,
         group_detr=args.group_detr,
         dec_n_points=args.dec_n_points,
+        dec_level_n_points=args.dec_level_n_points,
         lite_refpoint_refine=args.lite_refpoint_refine,
         bbox_refine_mode=args.bbox_refine_mode,
         query_init=args.query_init,
@@ -1653,6 +1694,7 @@ def main():
         online_refine_min_box_tokens=args.online_refine_min_box_tokens,
         multi_scale=args.multi_scale,
         expanded_scales=args.expanded_scales,
+        multi_scale_stop_epoch=args.multi_scale_stop_epoch,
         aug_config=AUG_PRESETS[args.aug_preset],
         use_ema=args.use_ema,
         ema_decay=args.ema_decay,
@@ -1669,6 +1711,7 @@ def main():
         mask_dice_loss_coef=args.mask_dice_loss_coef,
         use_cdn=args.use_cdn,
         dn_number=args.dn_number,
+        dn_total_query_budget=args.dn_total_query_budget,
         dn_label_noise_scale=args.dn_label_noise_scale,
         dn_box_noise_scale=args.dn_box_noise_scale,
         dn_negative=args.dn_negative,

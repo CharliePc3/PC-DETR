@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pc-detr.local/schemas/iclr27-results-v1.json",
+  "title": "PC-DETR ICLR 2027 experiment result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "experiment",
+    "protocol",
+    "metrics",
+    "efficiency",
+    "artifacts",
+    "environment",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "experiment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "recipe_id", "frozen_commit", "track", "system", "status"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "recipe_id": {"const": "iclr27-sdsr-v40-freeze-2026-09-06"},
+        "frozen_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "track": {"enum": ["analysis", "system"]},
+        "system": {"enum": ["sdsr_v40", "msp"]},
+        "status": {"enum": ["complete", "partial", "failed"]}
+      }
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seed", "detector_init_seed", "expected_epochs", "completed_epochs", "ema_enabled", "recipe"],
+      "properties": {
+        "seed": {"type": "integer", "minimum": 0},
+        "detector_init_seed": {"type": "integer", "minimum": 0},
+        "expected_epochs": {"type": "integer", "minimum": 1},
+        "completed_epochs": {"type": "integer", "minimum": 0},
+        "ema_enabled": {"type": "boolean"},
+        "recipe": {"type": "object"}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "raw", "ema"],
+      "properties": {
+        "unit": {"const": "COCO AP points (0-100)"},
+        "raw": {"$ref": "#/$defs/metricBranch"},
+        "ema": {"oneOf": [{"$ref": "#/$defs/metricBranch"}, {"type": "null"}]}
+      }
+    },
+    "efficiency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trainable_parameters", "peak_train_memory_mib", "total_train_time_seconds"],
+      "properties": {
+        "trainable_parameters": {"type": ["integer", "null"], "minimum": 0},
+        "peak_train_memory_mib": {"type": ["integer", "null"], "minimum": 0},
+        "total_train_time_seconds": {"type": ["number", "null"], "minimum": 0},
+        "inference_latency_ms": {"type": ["number", "null"], "minimum": 0},
+        "gflops": {"type": ["number", "null"], "minimum": 0}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["output_dir", "log", "manifest", "checkpoint_regular", "checkpoint_ema"],
+      "properties": {
+        "output_dir": {"type": "string"},
+        "log": {"type": "string"},
+        "manifest": {"type": "string"},
+        "checkpoint_regular": {"type": ["string", "null"]},
+        "checkpoint_ema": {"type": ["string", "null"]},
+        "train_log": {"type": ["string", "null"]}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": ["python", "platform"],
+      "properties": {
+        "python": {"type": "string"},
+        "platform": {"type": "string"},
+        "torch": {"type": ["string", "null"]},
+        "cuda": {"type": ["string", "null"]},
+        "gpu": {"type": ["string", "null"]}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generated_at_utc", "git_clean_at_launch", "command"],
+      "properties": {
+        "generated_at_utc": {"type": "string", "format": "date-time"},
+        "git_clean_at_launch": {"const": true},
+        "command": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  },
+  "$defs": {
+    "cocoMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["AP", "AP50", "AP75", "APS", "APM", "APL"],
+      "properties": {
+        "AP": {"type": "number"},
+        "AP50": {"type": "number"},
+        "AP75": {"type": "number"},
+        "APS": {"type": "number"},
+        "APM": {"type": "number"},
+        "APL": {"type": "number"}
+      }
+    },
+    "metricBranch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["best_epoch", "best", "final", "last5_AP"],
+      "properties": {
+        "best_epoch": {"type": "integer", "minimum": 1},
+        "best": {"$ref": "#/$defs/cocoMetrics"},
+        "final": {"$ref": "#/$defs/cocoMetrics"},
+        "last5_AP": {"type": "number"}
+      }
+    }
+  }
+}

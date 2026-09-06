@@ -51,6 +51,14 @@ logger = get_logger()
 BYTES_TO_MB = 1024.0 * 1024.0
 
 
+def is_multi_scale_training_active(args, epoch: int) -> bool:
+    """Return whether batch-level random resizing is active for this epoch."""
+    if not args.multi_scale:
+        return False
+    stop_epoch = int(getattr(args, "multi_scale_stop_epoch", -1))
+    return stop_epoch < 0 or epoch < stop_epoch
+
+
 def _is_cuda(device: torch.device) -> bool:
     """Return True if device is a CUDA device with an active CUDA context."""
     return (
@@ -526,7 +534,10 @@ def train_one_epoch(
             else:
                 model.update_dropout(schedules["do"][it])
 
-        if args.multi_scale and not args.do_random_resize_via_padding:
+        if (
+            is_multi_scale_training_active(args, epoch)
+            and not args.do_random_resize_via_padding
+        ):
             scales = compute_multi_scale_scales(
                 args.resolution, args.expanded_scales, args.patch_size, args.num_windows
             )
@@ -581,6 +592,18 @@ def train_one_epoch(
 
             with autocast(**get_autocast_args(args)):
                 outputs = model(new_samples, new_targets)
+                dn_runtime_stats = {}
+                dn_meta = outputs.get("dn_meta")
+                if dn_meta is not None:
+                    for key in (
+                        "original_max_gt",
+                        "max_gt",
+                        "truncated_gt_count",
+                        "pad_size",
+                        "total_dn_queries",
+                    ):
+                        if key in dn_meta:
+                            dn_runtime_stats[f"cdn_{key}"] = float(dn_meta[key])
                 loss_dict = criterion(outputs, new_targets)
                 weight_dict = dict(criterion.weight_dict)
                 if distill_active:
@@ -674,6 +697,8 @@ def train_one_epoch(
 
         if dense_o2o_stats:
             metric_logger.update(**dense_o2o_stats)
+        if dn_runtime_stats:
+            metric_logger.update(**dn_runtime_stats)
         metric_logger.update(class_error=loss_dict_reduced["class_error"])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
