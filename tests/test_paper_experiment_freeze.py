@@ -109,9 +109,15 @@ def test_default_p345_h_configuration_is_unchanged(tmp_path):
 
     assert _values_after(command, "--projector-scale", 3) == ["P3", "P4", "P5"]
     assert _values_after(command, "--dec-level-n-points", 3) == ["2", "3", "1"]
+    assert _values_after(command, "--projector-distill-level-weights", 3) == [
+        "0.5",
+        "1.0",
+        "0.5",
+    ]
     assert resolved["model"]["scale_interface"] == "p345"
     assert resolved["model"]["projector_scale"] == ["P3", "P4", "P5"]
     assert resolved["model"]["dec_level_n_points"] == [2, 3, 1]
+    assert resolved["model"]["projector_distill_level_weights"] == [0.5, 1.0, 0.5]
 
 
 def test_p4_is_the_frozen_p4_component(tmp_path):
@@ -122,8 +128,10 @@ def test_p4_is_the_frozen_p4_component(tmp_path):
 
     assert _values_after(command, "--projector-scale", 1) == ["P4"]
     assert _values_after(command, "--dec-level-n-points", 1) == ["3"]
+    assert _values_after(command, "--projector-distill-level-weights", 1) == ["1.0"]
     assert resolved["model"]["projector_scale"] == ["P4"]
     assert resolved["model"]["dec_level_n_points"] == [3]
+    assert resolved["model"]["projector_distill_level_weights"] == [1.0]
 
 
 def test_msp_p4_has_exactly_one_frozen_c2f_depth(tmp_path):
@@ -178,12 +186,14 @@ def test_h2_h5_pairwise_diffs_are_only_preregistered_axes(tmp_path):
         "model.scale_interface",
         "model.projector_scale",
         "model.dec_level_n_points",
+        "model.projector_distill_level_weights",
         "model.msp_c2f_blocks",
     }
     scale_diffs_sdsr = {
         "model.scale_interface",
         "model.projector_scale",
         "model.dec_level_n_points",
+        "model.projector_distill_level_weights",
     }
     projector_diffs = {"model.selected_system", "model.msp_c2f_blocks"}
 

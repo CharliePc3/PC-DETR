@@ -19,6 +19,7 @@ REPO_ROOT = PAPER_DIR.parent
 RECIPE_PATH = PAPER_DIR / "ICLR27_RECIPE.json"
 SCALE_INTERFACES = ("p4", "p345")
 FROZEN_MSP_C2F_DEPTH = 3
+FROZEN_PROJECTOR_DISTILL_LEVEL_WEIGHTS = (0.5, 1.0, 0.5)
 
 
 def load_recipe() -> dict:
@@ -57,8 +58,11 @@ def resolve_scale_interface(scale_interface: str, model: dict) -> dict:
 
     frozen_levels = tuple(model["projector_scale"])
     frozen_points = tuple(model["dec_level_n_points"])
-    if len(frozen_levels) != len(frozen_points):
-        raise ValueError("Frozen projector levels and decoder points are misaligned")
+    frozen_distill_weights = FROZEN_PROJECTOR_DISTILL_LEVEL_WEIGHTS
+    if not (
+        len(frozen_levels) == len(frozen_points) == len(frozen_distill_weights)
+    ):
+        raise ValueError("Frozen projector-level settings are misaligned")
 
     if scale_interface == "p345":
         selected_indexes = tuple(range(len(frozen_levels)))
@@ -69,10 +73,14 @@ def resolve_scale_interface(scale_interface: str, model: dict) -> dict:
 
     projector_scale = [frozen_levels[index] for index in selected_indexes]
     dec_level_n_points = [frozen_points[index] for index in selected_indexes]
+    projector_distill_level_weights = [
+        frozen_distill_weights[index] for index in selected_indexes
+    ]
     return {
         "name": scale_interface,
         "projector_scale": projector_scale,
         "dec_level_n_points": dec_level_n_points,
+        "projector_distill_level_weights": projector_distill_level_weights,
         "msp_c2f_blocks": [FROZEN_MSP_C2F_DEPTH] * len(projector_scale),
     }
 
@@ -114,6 +122,8 @@ def build_command(args: argparse.Namespace, recipe: dict) -> tuple[list[str], di
         "--p5-attention-bias", str(model["p5_attention_bias"]),
         "--out-feature-indexes", *map(str, model["out_feature_indexes"]),
         "--projector-scale", *scale["projector_scale"],
+        "--projector-distill-level-weights",
+        *map(str, scale["projector_distill_level_weights"]),
         "--projector-p5-mode", model["projector_p5_mode"],
         "--multi-scale",
         "--expanded-scales",
@@ -186,6 +196,9 @@ def build_command(args: argparse.Namespace, recipe: dict) -> tuple[list[str], di
             "scale_interface": scale["name"],
             "projector_scale": scale["projector_scale"],
             "dec_level_n_points": scale["dec_level_n_points"],
+            "projector_distill_level_weights": scale[
+                "projector_distill_level_weights"
+            ],
             "msp_c2f_blocks": (
                 scale["msp_c2f_blocks"] if args.system == "msp" else None
             ),

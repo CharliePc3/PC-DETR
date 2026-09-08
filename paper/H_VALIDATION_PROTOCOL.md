@@ -16,15 +16,16 @@ The H-Validation matrix permits exactly two scientific axes:
 The paper launcher exposes the second axis only as
 `--scale-interface {p4,p345}`. It resolves deterministically:
 
-| Interface | `projector_scale` | `dec_level_n_points` | MSP C2f blocks |
-|---|---|---|---|
-| `p345` | `P3 P4 P5` | `2 3 1` | `3 3 3` |
-| `p4` | `P4` | `3` | `3` |
+| Interface | `projector_scale` | `dec_level_n_points` | distill level weights | MSP C2f blocks |
+|---|---|---|---|---|
+| `p345` | `P3 P4 P5` | `2 3 1` | `0.5 1.0 0.5` | `3 3 3` |
+| `p4` | `P4` | `3` | `1.0` | `3` |
 
-The P4 sampling count is selected from the P4 component of the frozen
-P3/P4/P5 mapping. It is not separately tuned. The launcher does not expose
-arbitrary levels, sampling-point lists, C2f depths, learning rates, or other
-scientific overrides. P4-only is limited to the 24-epoch `analysis` track.
+The P4 sampling count and distillation level weight are selected from the P4
+components of their frozen P3/P4/P5 mappings. They are not separately tuned.
+The launcher does not expose arbitrary levels, sampling-point lists, C2f
+depths, distillation weights, learning rates, or other scientific overrides.
+P4-only is limited to the 24-epoch `analysis` track.
 
 ## H0-H5 preregistration
 
