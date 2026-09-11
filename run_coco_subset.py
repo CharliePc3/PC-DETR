@@ -706,6 +706,16 @@ def parse_args():
             "source-specific bias and normalization remain independent."
         ),
     )
+    parser.add_argument(
+        "--projector-p4-depth-prior",
+        type=float,
+        nargs="+",
+        default=None,
+        help=(
+            "Fixed positive weights for backbone-depth P4 contributions, aligned "
+            "with --out-feature-indexes; applied after P4 sampling and before fusion."
+        ),
+    )
     parser.add_argument("--projector-distill-teacher", default=None)
     parser.add_argument("--projector-distill-coef", type=float, default=0.0)
     parser.add_argument("--projector-distill-stop-epoch", type=int, default=20)
@@ -1063,6 +1073,21 @@ def main():
         )
     else:
         args.projector_c2f_blocks = None
+    if args.projector_p4_depth_prior is not None:
+        if args.projector_type != "multiscale":
+            raise ValueError(
+                "--projector-p4-depth-prior requires --projector-type multiscale."
+            )
+        if "P4" not in args.projector_scale:
+            raise ValueError("--projector-p4-depth-prior requires P4 in --projector-scale.")
+        if len(args.projector_p4_depth_prior) != len(args.out_feature_indexes):
+            raise ValueError(
+                "--projector-p4-depth-prior must provide one value per "
+                "--out-feature-indexes entry."
+            )
+        if any(not np.isfinite(weight) or weight <= 0 for weight in args.projector_p4_depth_prior):
+            raise ValueError("--projector-p4-depth-prior values must be finite and positive.")
+        args.projector_p4_depth_prior = tuple(args.projector_p4_depth_prior)
     if args.projector_distill_coef < 0:
         raise ValueError("--projector-distill-coef must be non-negative.")
     if args.projector_distill_coef > 0 and not args.projector_distill_teacher:
@@ -1462,6 +1487,7 @@ def main():
         projector_source_mode=args.projector_source_mode,
         projector_c2f_blocks=args.projector_c2f_blocks,
         projector_resample_share=args.projector_resample_share,
+        projector_p4_depth_prior=args.projector_p4_depth_prior,
         projector_type=args.projector_type,
         projector_p5_mode=args.projector_p5_mode,
         sdsr_rank_channels=args.sdsr_rank_channels,
@@ -1526,6 +1552,7 @@ def main():
     log_main(f"projector_source_mode={args.projector_source_mode}")
     log_main(f"projector_c2f_blocks={args.projector_c2f_blocks}")
     log_main(f"projector_resample_share={args.projector_resample_share}")
+    log_main(f"projector_p4_depth_prior={args.projector_p4_depth_prior}")
     log_main(f"projector_distill_teacher={args.projector_distill_teacher}")
     log_main(f"projector_distill_coef={args.projector_distill_coef}")
     log_main(f"projector_distill_stop_epoch={args.projector_distill_stop_epoch}")
@@ -1660,6 +1687,7 @@ def main():
         projector_source_mode=args.projector_source_mode,
         projector_c2f_blocks=args.projector_c2f_blocks,
         projector_resample_share=args.projector_resample_share,
+        projector_p4_depth_prior=args.projector_p4_depth_prior,
         projector_type=args.projector_type,
         projector_p5_mode=args.projector_p5_mode,
         sdsr_rank_channels=args.sdsr_rank_channels,

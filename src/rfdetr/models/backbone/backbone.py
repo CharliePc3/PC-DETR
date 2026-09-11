@@ -214,6 +214,7 @@ class Backbone(BackboneBase):
         projector_source_mode: str = "mask",
         projector_c2f_blocks: dict[str, int] | None = None,
         projector_resample_share: str = "none",
+        projector_p4_depth_prior: tuple[float, ...] | None = None,
         sdsr_rank_channels: int = 64,
         sdsr_detail_channels: int = 32,
         sdsr_use_local_reassembly: bool = True,
@@ -281,6 +282,7 @@ class Backbone(BackboneBase):
                 source_selection_mode=projector_source_mode,
                 c2f_blocks_by_scale=c2f_blocks_by_scale,
                 resample_share_mode=projector_resample_share,
+                p4_depth_prior=projector_p4_depth_prior,
             )
         elif projector_type == "sdsr":
             self.projector = ScaleDecoupledReassemblyProjector(

@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0.0",
+  "recipe_id": "iclr27-msp-interface-factorial-2026-09-11",
+  "base_commit": "2b40a235d5ca3a40d5e39f5060efa0570a12a5ad",
+  "parent_recipe": "iclr27-sdsr-v40-freeze-2026-09-06",
+  "track": "analysis",
+  "seed": 46,
+  "detector_init_seed": 1046,
+  "factors": {
+    "detector_interface": {
+      "P345": {
+        "projector_scale": ["P3", "P4", "P5"],
+        "dec_level_n_points": [2, 3, 1],
+        "msp_c2f_blocks": [3, 3, 3],
+        "projector_distill_level_weights": [0.5, 1.0, 0.5]
+      },
+      "P34": {
+        "projector_scale": ["P3", "P4"],
+        "dec_level_n_points": [2, 3],
+        "msp_c2f_blocks": [3, 3],
+        "projector_distill_level_weights": [0.5, 1.0]
+      }
+    },
+    "p4_depth_prior": {
+      "uniform_original": null,
+      "f11_heavy_fixed": [0.2485995, 0.4129705, 0.7943345, 2.5440953]
+    }
+  },
+  "runs": {
+    "M0": {"detector_interface": "P345", "p4_depth_prior": "uniform_original"},
+    "M1": {"detector_interface": "P345", "p4_depth_prior": "f11_heavy_fixed"},
+    "M2": {"detector_interface": "P34", "p4_depth_prior": "uniform_original"},
+    "M3": {"detector_interface": "P34", "p4_depth_prior": "f11_heavy_fixed"}
+  },
+  "contrasts": {
+    "prior_with_p5": "M1-M0",
+    "prior_without_p5": "M3-M2",
+    "remove_p5_without_prior": "M2-M0",
+    "remove_p5_with_prior": "M3-M1",
+    "interaction": "(M3-M2)-(M1-M0)"
+  }
+}

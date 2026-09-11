@@ -100,6 +100,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--train-log", type=Path, default=None)
+    parser.add_argument(
+        "--efficiency-json",
+        type=Path,
+        default=None,
+        help="Optional FLOPs-only output from tools/benchmark_detector.py.",
+    )
     parser.add_argument("--output", type=Path, default=None)
     return parser.parse_args()
 
@@ -118,6 +124,22 @@ def main() -> int:
     raw = metric_branch(rows, "test_coco_eval_bbox")
     ema = metric_branch(rows, "ema_test_coco_eval_bbox")
     status = "complete" if completed_epochs >= expected_epochs else "partial"
+
+    efficiency_profile = (
+        load_json(args.efficiency_json)
+        if args.efficiency_json is not None
+        else None
+    )
+    if efficiency_profile is not None:
+        if not efficiency_profile["environment"].get("latency_skipped"):
+            raise SystemExit(
+                "Factorial training results only accept a FLOPs-only efficiency profile "
+                "created with --skip-latency."
+            )
+        profiled_total = efficiency_profile.get("parameters")
+        logged_total = rows[-1].get("n_total_parameters") if rows else None
+        if logged_total is not None and profiled_total != logged_total:
+            raise SystemExit("Efficiency profile parameter count does not match training log")
 
     result = {
         "schema_version": "1.0.0",
@@ -140,10 +162,15 @@ def main() -> int:
         "metrics": {"unit": "COCO AP points (0-100)", "raw": raw, "ema": ema},
         "efficiency": {
             "trainable_parameters": rows[-1].get("n_parameters") if rows else None,
+            "total_parameters": rows[-1].get("n_total_parameters") if rows else None,
             "peak_train_memory_mib": peak_memory(args.train_log),
             "total_train_time_seconds": round(sum(duration_seconds(row.get("epoch_time")) for row in rows), 3) if rows else None,
             "inference_latency_ms": None,
-            "gflops": None,
+            "gflops": (
+                efficiency_profile.get("gflops")
+                if efficiency_profile is not None
+                else None
+            ),
         },
         "artifacts": {
             "output_dir": str(output_dir),
@@ -152,6 +179,11 @@ def main() -> int:
             "checkpoint_regular": first_existing(output_dir / "checkpoint_best_regular.pth", output_dir / "checkpoint.pth"),
             "checkpoint_ema": first_existing(output_dir / "checkpoint_best_ema.pth") if manifest["ema_enabled"] else None,
             "train_log": str(args.train_log.resolve()) if args.train_log else None,
+            "efficiency_profile": (
+                str(args.efficiency_json.resolve())
+                if args.efficiency_json is not None
+                else None
+            ),
         },
         "environment": manifest["environment"],
         "provenance": {

@@ -5,6 +5,7 @@
 # ------------------------------------------------------------------------
 
 
+import math
 import os
 from typing import Any, ClassVar, Dict, List, Literal, Mapping, Optional, Tuple
 
@@ -63,6 +64,7 @@ class ModelConfig(BaseConfig):
     projector_source_mode: Literal["mask", "prune"] = "mask"
     projector_c2f_blocks: Optional[Dict[str, int]] = None
     projector_resample_share: Literal["none", "p3", "p5", "p3_p5"] = "none"
+    projector_p4_depth_prior: Optional[Tuple[float, ...]] = None
     projector_type: Literal[
         "multiscale",
         "sdsr",
@@ -249,6 +251,24 @@ class ModelConfig(BaseConfig):
                 raise ValueError("P3 resampling sharing requires P3 in projector_scale.")
             if self.projector_resample_share in {"p5", "p3_p5"} and "P5" not in self.projector_scale:
                 raise ValueError("P5 resampling sharing requires P5 in projector_scale.")
+        if self.projector_p4_depth_prior is not None:
+            if self.projector_type != "multiscale":
+                raise ValueError(
+                    "projector_p4_depth_prior requires projector_type='multiscale'."
+                )
+            if "P4" not in self.projector_scale:
+                raise ValueError("projector_p4_depth_prior requires P4 in projector_scale.")
+            if len(self.projector_p4_depth_prior) != len(self.out_feature_indexes):
+                raise ValueError(
+                    "projector_p4_depth_prior must provide one weight per out_feature_index."
+                )
+            if any(
+                not math.isfinite(weight) or weight <= 0
+                for weight in self.projector_p4_depth_prior
+            ):
+                raise ValueError(
+                    "projector_p4_depth_prior weights must be finite and positive."
+                )
         if self.p5_attention_bias != 0.0:
             if not self.projector_scale or self.projector_scale[-1] != "P5":
                 raise ValueError(
@@ -585,6 +605,7 @@ class TrainConfig(BaseModel):
     projector_source_mode: Literal["mask", "prune"] = "mask"
     projector_c2f_blocks: Optional[Dict[str, int]] = None
     projector_resample_share: Literal["none", "p3", "p5", "p3_p5"] = "none"
+    projector_p4_depth_prior: Optional[Tuple[float, ...]] = None
     projector_distill_teacher: Optional[str] = None
     projector_distill_coef: float = 0.0
     projector_distill_stop_epoch: int = 20

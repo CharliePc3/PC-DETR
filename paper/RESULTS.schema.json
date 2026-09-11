@@ -22,7 +22,12 @@
       "required": ["id", "recipe_id", "frozen_commit", "track", "system", "status"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
-        "recipe_id": {"const": "iclr27-sdsr-v40-freeze-2026-09-06"},
+        "recipe_id": {
+          "enum": [
+            "iclr27-sdsr-v40-freeze-2026-09-06",
+            "iclr27-msp-interface-factorial-2026-09-11"
+          ]
+        },
         "frozen_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
         "track": {"enum": ["analysis", "system"]},
         "system": {"enum": ["sdsr_v40", "msp"]},
@@ -55,9 +60,10 @@
     "efficiency": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["trainable_parameters", "peak_train_memory_mib", "total_train_time_seconds"],
+      "required": ["trainable_parameters", "total_parameters", "peak_train_memory_mib", "total_train_time_seconds"],
       "properties": {
         "trainable_parameters": {"type": ["integer", "null"], "minimum": 0},
+        "total_parameters": {"type": ["integer", "null"], "minimum": 0},
         "peak_train_memory_mib": {"type": ["integer", "null"], "minimum": 0},
         "total_train_time_seconds": {"type": ["number", "null"], "minimum": 0},
         "inference_latency_ms": {"type": ["number", "null"], "minimum": 0},
@@ -74,7 +80,8 @@
         "manifest": {"type": "string"},
         "checkpoint_regular": {"type": ["string", "null"]},
         "checkpoint_ema": {"type": ["string", "null"]},
-        "train_log": {"type": ["string", "null"]}
+        "train_log": {"type": ["string", "null"]},
+        "efficiency_profile": {"type": ["string", "null"]}
       }
     },
     "environment": {

@@ -302,6 +302,7 @@ class MultiScaleProjector(nn.Module):
         source_selection_mode="mask",
         c2f_blocks_by_scale=None,
         resample_share_mode="none",
+        p4_depth_prior=None,
     ):
         """
         Args:
@@ -380,6 +381,22 @@ class MultiScaleProjector(nn.Module):
         if any(blocks < 0 for blocks in c2f_blocks_by_scale):
             raise ValueError("C2f block counts must be non-negative.")
         self.c2f_blocks_by_scale = list(c2f_blocks_by_scale)
+        if p4_depth_prior is not None:
+            if 1.0 not in scale_factors:
+                raise ValueError("A P4 depth prior requires P4 in projector_scale.")
+            if len(p4_depth_prior) != num_features:
+                raise ValueError(
+                    "p4_depth_prior must provide one fixed weight per backbone feature."
+                )
+            if any(not np.isfinite(weight) for weight in p4_depth_prior):
+                raise ValueError("p4_depth_prior weights must be finite.")
+            if any(weight <= 0 for weight in p4_depth_prior):
+                raise ValueError("p4_depth_prior weights must be positive.")
+            # Deliberately keep the prior as immutable Python data: it is neither a
+            # Parameter nor a buffer and therefore cannot enter the optimizer or
+            # alter checkpoint state. Multiplication below preserves input dtype.
+            p4_depth_prior = tuple(float(weight) for weight in p4_depth_prior)
+        self.p4_depth_prior = p4_depth_prior
 
         stages_sampling = []
         stages = []
@@ -789,6 +806,10 @@ class MultiScaleProjector(nn.Module):
                 self.stage_input_indices[i], self.stages_sampling[i]
             ):
                 sampled = stage_sampling(x[source_index])
+                # Fixed P4 depth prior: apply to each independently sampled P4
+                # contribution before the original concatenation/C2f fusion.
+                if self.scale_factors[i] == 1.0 and self.p4_depth_prior is not None:
+                    sampled = sampled * self.p4_depth_prior[source_index]
                 if (
                     self.source_selection_mode == "mask"
                     and source_index not in selected_sources

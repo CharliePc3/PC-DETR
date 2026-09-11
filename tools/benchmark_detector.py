@@ -58,6 +58,11 @@ def parse_args():
         action="store_true",
         help="Skip JIT FLOP tracing, which does not support the segmentation-head einsum.",
     )
+    parser.add_argument(
+        "--skip-latency",
+        action="store_true",
+        help="Do not run latency or inference-memory timing (FLOPs-only mode).",
+    )
     return parser.parse_args()
 
 
@@ -113,6 +118,9 @@ def build_model(checkpoint):
         ),
         "projector_resample_share": checkpoint_arg(
             saved_args, "projector_resample_share", "none"
+        ),
+        "projector_p4_depth_prior": checkpoint_arg(
+            saved_args, "projector_p4_depth_prior", None
         ),
         "projector_type": checkpoint_arg(
             saved_args, "projector_type", "multiscale"
@@ -233,6 +241,9 @@ def main():
     image = torch.randn(3, resolution, resolution, device=device)
     inputs = [image]
     parameters = sum(parameter.numel() for parameter in model.parameters())
+    trainable_parameters = sum(
+        parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+    )
 
     if args.skip_flops:
         detailed_flops = {}
@@ -254,6 +265,18 @@ def main():
         )
         total_gflops = float(sum(detailed_flops.values()))
 
+    latency_results = (
+        {"fp32_tf32": None, "amp_fp16": None}
+        if args.skip_latency
+        else {
+            "fp32_tf32": latency_and_memory(
+                model, inputs, device, args.warmup, args.repeats, amp=False
+            ),
+            "amp_fp16": latency_and_memory(
+                model, inputs, device, args.warmup, args.repeats, amp=True
+            ),
+        }
+    )
     results = {
         "timestamp": datetime.now().astimezone().isoformat(),
         "checkpoint": str(checkpoint_path),
@@ -271,8 +294,10 @@ def main():
             "postprocess_included": False,
             "tf32_enabled": True,
             "flop_tracing_skipped": args.skip_flops,
+            "latency_skipped": args.skip_latency,
         },
         "parameters": parameters,
+        "trainable_parameters": trainable_parameters,
         "gflops": total_gflops,
         "repo_supported_gflops_without_sdpa": (
             None if total_gflops is None else total_gflops - sdpa_gflops
@@ -280,8 +305,7 @@ def main():
         "sdpa_gflops": sdpa_gflops,
         "flop_convention": "One multiply-add is counted as one FLOP; SDPA QK^T and attention-V are included; grid_sampler remains ignored as in the RF-DETR utility.",
         "detailed_gflops": detailed_flops,
-        "fp32_tf32": latency_and_memory(model, inputs, device, args.warmup, args.repeats, amp=False),
-        "amp_fp16": latency_and_memory(model, inputs, device, args.warmup, args.repeats, amp=True),
+        **latency_results,
     }
 
     output_path = Path(args.output).expanduser().resolve()

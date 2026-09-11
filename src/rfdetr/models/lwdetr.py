@@ -1519,6 +1519,7 @@ def build_model(args):
         projector_source_mode=getattr(args, "projector_source_mode", "mask"),
         projector_c2f_blocks=getattr(args, "projector_c2f_blocks", None),
         projector_resample_share=getattr(args, "projector_resample_share", "none"),
+        projector_p4_depth_prior=getattr(args, "projector_p4_depth_prior", None),
         sdsr_rank_channels=args.sdsr_rank_channels,
         sdsr_detail_channels=args.sdsr_detail_channels,
         sdsr_use_local_reassembly=args.sdsr_use_local_reassembly,

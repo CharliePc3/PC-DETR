@@ -400,6 +400,7 @@ class Model:
                 "projector_source_mode",
                 "projector_c2f_blocks",
                 "projector_resample_share",
+                "projector_p4_depth_prior",
                 "projector_type",
                 "projector_p5_mode",
                 "resolution",
@@ -447,10 +448,13 @@ class Model:
             model_without_ddp = model.module
 
         n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        n_total_parameters = sum(p.numel() for p in model.parameters())
         logger.info(
-            "Number of trainable parameters: %d (%.2f M)",
+            "Number of trainable parameters: %d (%.2f M); total parameters: %d (%.2f M)",
             n_parameters,
             n_parameters / 1e6,
+            n_total_parameters,
+            n_total_parameters / 1e6,
         )
         param_dicts = get_param_dict(args, model_without_ddp)
 
@@ -829,6 +833,7 @@ class Model:
                 **{f"test_{k}": v for k, v in test_stats.items()},
                 "epoch": epoch,
                 "n_parameters": n_parameters,
+                "n_total_parameters": n_total_parameters,
             }
             if args.use_ema:
                 ema_test_stats, _ = evaluate(
@@ -872,7 +877,11 @@ class Model:
             log_stats.update(best_map_holder.summary())
 
             # epoch parameters
-            ep_paras = {"epoch": epoch, "n_parameters": n_parameters}
+            ep_paras = {
+                "epoch": epoch,
+                "n_parameters": n_parameters,
+                "n_total_parameters": n_total_parameters,
+            }
             log_stats.update(ep_paras)
             try:
                 log_stats.update({"now_time": str(datetime.datetime.now())})
@@ -1527,6 +1536,13 @@ def get_args_parser():
         ),
         help="Build P5 independently (full) or derive it cheaply from P4.",
     )
+    parser.add_argument(
+        "--projector_p4_depth_prior",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Fixed P4 source weights aligned with out_feature_indexes.",
+    )
     parser.add_argument("--sdsr_rank_channels", default=64, type=int)
     parser.add_argument("--sdsr_detail_channels", default=32, type=int)
     parser.add_argument(
@@ -1922,6 +1938,7 @@ def populate_args(
     projector_scale="P4",
     projector_type="multiscale",
     projector_p5_mode="full",
+    projector_p4_depth_prior=None,
     sdsr_rank_channels=64,
     sdsr_detail_channels=32,
     sdsr_use_local_reassembly=True,
@@ -2096,6 +2113,7 @@ def populate_args(
         projector_scale=projector_scale,
         projector_type=projector_type,
         projector_p5_mode=projector_p5_mode,
+        projector_p4_depth_prior=projector_p4_depth_prior,
         sdsr_rank_channels=sdsr_rank_channels,
         sdsr_detail_channels=sdsr_detail_channels,
         sdsr_use_local_reassembly=sdsr_use_local_reassembly,
